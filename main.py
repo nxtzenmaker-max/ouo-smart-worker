@@ -152,34 +152,59 @@ def parse_proxy_line(line):
     return None
 
 def load_proxy_pool():
+    data = None
     if os.path.exists(PROXIES_FILE):
         try:
             with open(PROXIES_FILE, 'r') as f:
-                data = json.load(f)
-                if isinstance(data, dict) and "active" in data:
-                    return data
+                content = json.load(f)
+                if isinstance(content, dict) and "active" in content:
+                    data = content
         except Exception as e:
             print(f"[!] Error loading proxy pool: {e}")
             
-    default_ip = VISITOR_PROXY_SERVER.replace("http://", "").replace("https://", "").split(":")[0]
-    default_port = VISITOR_PROXY_SERVER.split(":")[-1] if ":" in VISITOR_PROXY_SERVER else "80"
-    default_raw = f"{default_ip}:{default_port}:{VISITOR_PROXY_USER}:{VISITOR_PROXY_PASS}"
-    pool = {
-        "active": {
-            "server": VISITOR_PROXY_SERVER,
-            "ip": default_ip,
-            "port": default_port,
-            "username": VISITOR_PROXY_USER,
-            "password": VISITOR_PROXY_PASS,
-            "raw": default_raw,
-            "added_at": time.time(),
-            "fail_count": 0
-        },
-        "backups": [],
-        "exhausted": []
-    }
-    save_proxy_pool(pool)
-    return pool
+    if not data:
+        default_ip = VISITOR_PROXY_SERVER.replace("http://", "").replace("https://", "").split(":")[0]
+        default_port = VISITOR_PROXY_SERVER.split(":")[-1] if ":" in VISITOR_PROXY_SERVER else "80"
+        default_raw = f"{default_ip}:{default_port}:{VISITOR_PROXY_USER}:{VISITOR_PROXY_PASS}"
+        data = {
+            "active": {
+                "server": VISITOR_PROXY_SERVER,
+                "ip": default_ip,
+                "port": default_port,
+                "username": VISITOR_PROXY_USER,
+                "password": VISITOR_PROXY_PASS,
+                "raw": default_raw,
+                "added_at": time.time(),
+                "fail_count": 0
+            },
+            "backups": [],
+            "exhausted": []
+        }
+
+    # Automatically queue fresh backup proxies if not already present
+    known_backups = ["p.webshare.io:80:wsbpzavv-rotate:40a8xrxuzsyd"]
+    existing_raws = set()
+    if data.get("active"):
+        existing_raws.add(data["active"].get("raw"))
+    for b in data.get("backups", []):
+        existing_raws.add(b.get("raw"))
+    for e in data.get("exhausted", []):
+        existing_raws.add(e.get("raw"))
+
+    updated = False
+    for kb in known_backups:
+        if kb not in existing_raws:
+            p = parse_proxy_line(kb)
+            if p:
+                p["added_at"] = time.time()
+                p["fail_count"] = 0
+                data.setdefault("backups", []).append(p)
+                existing_raws.add(kb)
+                updated = True
+
+    if updated or not os.path.exists(PROXIES_FILE):
+        save_proxy_pool(data)
+    return data
 
 def save_proxy_pool(pool):
     try:
