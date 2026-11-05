@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.json
+!ouo_session.json
 !requirements.txt
 .env
 .venv/

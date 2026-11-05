@@ -84,15 +84,6 @@ SESSION_FILE = resolve_path("ouo_session.json", "/home/ipx/ouo_session.json")
 STATS_FILE = resolve_path("campaign_stats.json", "/home/ipx/campaign_stats.json")
 AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 
-# Server direct connection for login, link shortening & dashboard stats (saves 100% proxy data)
-PROXY_CONFIG = None
-if os.environ.get('OUO_PROXY_SERVER'):
-    PROXY_CONFIG = {
-        'server': os.environ.get('OUO_PROXY_SERVER'),
-        'username': os.environ.get('OUO_PROXY_USER', 'res-us'),
-        'password': os.environ.get('OUO_PROXY_PASS', '')
-    }
-
 # Dedicated Rotating Residential Proxies for visitor traffic (US Only)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://gw.proxyrise.com:443')
 VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'pgw-08e31e1cc8432fd2889c36462754d0e839f5178a3b0991b8')
@@ -110,6 +101,15 @@ VISITOR_PROXY_CONFIG = {
     'username': 'res-us-rotate',
     'password': VISITOR_PROXY_PASS
 }
+
+# Use Residential Proxy by default for login, dashboard & shortener to bypass Cloudflare on Railway/Cloud
+PROXY_CONFIG = VISITOR_PROXY_CONFIG
+if os.environ.get('OUO_PROXY_SERVER'):
+    PROXY_CONFIG = {
+        'server': os.environ.get('OUO_PROXY_SERVER'),
+        'username': os.environ.get('OUO_PROXY_USER', 'res-us-rotate'),
+        'password': os.environ.get('OUO_PROXY_PASS', VISITOR_PROXY_PASS)
+    }
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -320,13 +320,27 @@ def do_login(headless=True):
                 window.chrome = { runtime: {} };
             ''')
             page = context.new_page()
-            print("[*] Opening signin page...")
-            page.goto('https://ouo.io/auth/signin', wait_until='domcontentloaded', timeout=35000)
+            print("[*] Opening signin page with residential proxy...")
+            try:
+                page.goto('https://ouo.io/auth/signin', wait_until='domcontentloaded', timeout=35000)
+            except Exception as nav_e:
+                print(f"[!] Navigation notice: {nav_e}")
             
-            for _ in range(25):
+            for i in range(35):
                 time.sleep(1)
-                if 'Sign in' in page.title() or ('Just a moment' not in page.title() and page.title() != ''):
+                title = page.title()
+                if 'Sign in' in title or ('Just a moment' not in title and title != ''):
                     break
+                # Try clicking Turnstile checkbox if challenge is present
+                try:
+                    for frame in page.frames:
+                        cb = frame.query_selector('input[type="checkbox"], .ctp-checkbox-label, #challenge-stage')
+                        if cb:
+                            cb.click(force=True)
+                            time.sleep(2)
+                            break
+                except Exception:
+                    pass
                     
             if 'Sign in' not in page.title() and 'Just a moment' in page.title():
                 print(f"[-] Could not reach sign in page. Current title: {page.title()}")
