@@ -141,7 +141,6 @@ SESSION_LIFETIME = 86400      # 24 Hours
 # Concurrency Locks & Flags
 stats_lock = threading.Lock()
 shortener_lock = threading.Lock()
-browser_semaphore = threading.Semaphore(int(os.environ.get("MAX_CONCURRENT_BROWSERS", 4)))
 daemon_running = False
 
 # ------------------------------------------------------------------------------
@@ -598,13 +597,12 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
         return False, "Playwright not installed"
     use_proxy = proxy or VISITOR_PROXY_CONFIG
     try:
-        with browser_semaphore:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=DEFAULT_CHROMIUM_ARGS,
-                    ignore_default_args=['--enable-automation']
-                )
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=DEFAULT_CHROMIUM_ARGS,
+                ignore_default_args=['--enable-automation']
+            )
             context = browser.new_context(
                 proxy=use_proxy,
                 user_agent=USER_AGENT,
@@ -918,7 +916,7 @@ def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
         t = threading.Thread(target=worker_routine, args=(w_id,), daemon=True)
         t.start()
         threads.append(t)
-        time.sleep(random.uniform(0.6, 1.2))
+        time.sleep(random.uniform(2.5, 4.0))
         
     print(f"[+] All {num_workers} Workers successfully dispatched! Running 24/7.")
     
