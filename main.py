@@ -86,9 +86,9 @@ AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
-VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://p.webshare.io:80')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'wsbpzavv-rotate')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', '40a8xrxuzsyd')
+VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://pr.oxylabs.io:7777')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'customer-resi_3dfee8b6-cc-us')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'i1URq0Oz3_9s')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -182,7 +182,7 @@ def load_proxy_pool():
         }
 
     # Automatically queue fresh backup proxies if not already present
-    known_backups = ["p.webshare.io:80:wsbpzavv-rotate:40a8xrxuzsyd"]
+    known_backups = []
     existing_raws = set()
     if data.get("active"):
         existing_raws.add(data["active"].get("raw"))
@@ -288,6 +288,13 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
         if dead_raw and current.get("raw") != dead_raw:
             return pool.get("active")
             
+        if "pr.oxylabs.io" in current.get("server", "") or "customer-resi" in current.get("username", ""):
+            if "407" not in reason and "auth" not in reason.lower() and "401" not in reason:
+                print(f"[ProxyManager] 🔄 Oxylabs rotating residential gateway active ({reason}). Resetting for next connection cycle.")
+                current["fail_count"] = 0
+                save_proxy_pool(pool)
+                return current
+
         current["exhausted_at"] = time.time()
         current["reason"] = reason
         pool.setdefault("exhausted", []).append(current)
