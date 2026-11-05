@@ -455,7 +455,7 @@ DEFAULT_CHROMIUM_ARGS = [
 ]
 
 HOURLY_CHECK_INTERVAL = 300  # Check every 5 minutes
-NUM_WORKERS = int(os.environ.get("OUO_WORKERS", 2))
+NUM_WORKERS = int(os.environ.get("OUO_WORKERS", 1))
 SESSION_LIFETIME = 86400      # 24 Hours
 
 # Concurrency Locks & Flags
