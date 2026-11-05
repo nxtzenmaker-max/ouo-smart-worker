@@ -85,9 +85,9 @@ STATS_FILE = resolve_path("campaign_stats.json", "/home/ipx/campaign_stats.json"
 AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Webshare)
-VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://45.3.36.165:3129')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'wd9bk2kmqzud-rotate')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'y6n0kil99dzj5qm')
+VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://p.webshare.io:80')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'yjzdynuw-rotate')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'z8aeyhoyjcz2')
 
 def get_rotating_visitor_proxy():
     cfg = {
@@ -95,7 +95,7 @@ def get_rotating_visitor_proxy():
         'username': VISITOR_PROXY_USER,
         'password': VISITOR_PROXY_PASS
     }
-    return cfg, "🇺🇸 US (Webshare)"
+    return cfg, "🇺🇸 US (Webshare Rotating)"
 
 VISITOR_PROXY_CONFIG = {
     'server': VISITOR_PROXY_SERVER,
@@ -327,24 +327,22 @@ def do_login(headless=True):
             except Exception as nav_e:
                 print(f"[!] Navigation notice: {nav_e}")
             
-            for i in range(35):
+            for i in range(15):
                 time.sleep(1)
-                title = page.title()
+                try:
+                    title = page.title()
+                except Exception:
+                    title = ""
                 if 'Sign in' in title or ('Just a moment' not in title and title != ''):
                     break
-                # Try clicking Turnstile checkbox if challenge is present
-                try:
-                    for frame in page.frames:
-                        cb = frame.query_selector('input[type="checkbox"], .ctp-checkbox-label, #challenge-stage')
-                        if cb:
-                            cb.click(force=True)
-                            time.sleep(2)
-                            break
-                except Exception:
-                    pass
                     
-            if 'Sign in' not in page.title() and 'Just a moment' in page.title():
-                print(f"[-] Could not reach sign in page. Current title: {page.title()}")
+            try:
+                cur_title = page.title()
+            except Exception:
+                cur_title = ""
+                
+            if 'Sign in' not in cur_title and 'Just a moment' in cur_title:
+                print(f"[-] Could not reach sign in page (Challenge page active). Current title: {cur_title}")
                 browser.close()
                 return False
                 
@@ -593,7 +591,6 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
                     '--disable-blink-features=AutomationControlled',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--single-process',
                     '--no-zygote',
                     '--disable-software-rasterizer',
                     '--disable-extensions',
@@ -654,7 +651,11 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
                 page.goto(short_url, wait_until='commit', timeout=25000)
             
             for _ in range(15):
-                if 'Just a moment' not in page.title() and page.title() != '':
+                try:
+                    t = page.title()
+                    if 'Just a moment' not in t and t != '':
+                        break
+                except Exception:
                     break
                 time.sleep(1)
                     
@@ -668,7 +669,11 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
                 
             # Step 1: Click "I'M A HUMAN" and ensure transition to /go/
             for _ in range(3):
-                if '/go/' in page.url or ('ouo.io' not in page.url and 'ouo.press' not in page.url):
+                try:
+                    cur_u = page.url
+                    if '/go/' in cur_u or ('ouo.io' not in cur_u and 'ouo.press' not in cur_u):
+                        break
+                except Exception:
                     break
                 try:
                     btn1 = page.wait_for_selector('#btn-main', timeout=6000)
@@ -687,10 +692,18 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
                         page.wait_for_url(lambda u: '/go/' in u or ('ouo.io' not in u and 'ouo.press' not in u), timeout=5000)
                     except Exception:
                         pass
-                page.bring_to_front()
+                try:
+                    page.bring_to_front()
+                except Exception:
+                    pass
             
             # Step 2: On /go/ page, wait for countdown and click GET LINK
-            if '/go/' in page.url:
+            try:
+                is_go_page = '/go/' in page.url
+            except Exception:
+                is_go_page = False
+                
+            if is_go_page:
                 for _ in range(15):
                     time.sleep(1)
                     try:
@@ -710,15 +723,19 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
                         continue
             
             # Wait for destination navigation with fallback
-            final_url = page.url
+            try:
+                final_url = page.url
+            except Exception:
+                final_url = ""
             for i in range(15):
                 time.sleep(1)
                 try:
-                    if 'ouo.io' not in page.url and 'ouo.press' not in page.url:
-                        final_url = page.url
+                    cur_u = page.url
+                    if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u:
+                        final_url = cur_u
                         time.sleep(random.uniform(1.2, 2.0))
                         break
-                    if i >= 3 and ('/go/' in page.url):
+                    if i >= 3 and ('/go/' in cur_u):
                         try:
                             page.evaluate('() => { const f = document.querySelector("#form-go"); if (f) f.submit(); }')
                         except Exception:
@@ -730,7 +747,10 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
                 page.unroute("**/*")
             except Exception:
                 pass
-            browser.close()
+            try:
+                browser.close()
+            except Exception:
+                pass
             is_valid = 'ouo.io' not in final_url and 'ouo.press' not in final_url and 'chrome-error' not in final_url
             return is_valid, final_url
     except Exception as e:
@@ -850,25 +870,24 @@ def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
         stats["daemon_started_str"] = get_current_time_str(stats["daemon_started_at"])
     save_stats(stats)
     
-    try:
-        if not check_session_validity():
-            do_login()
-    except Exception as e:
-        print(f"[!] Session initialization error: {e}")
-
-    try:
-        check_ouo_dashboard_hourly()
-    except Exception as e:
-        print(f"[!] Initial dashboard check error: {e}")
-    
-    def hourly_timer_thread():
+    def session_and_hourly_worker():
+        try:
+            if not check_session_validity():
+                do_login()
+        except Exception as e:
+            print(f"[!] Session initialization error: {e}")
+        try:
+            check_ouo_dashboard_hourly()
+        except Exception as e:
+            print(f"[!] Initial dashboard check error: {e}")
+            
         while daemon_running:
             time.sleep(60)
             try:
                 check_ouo_dashboard_hourly()
             except Exception:
                 pass
-    threading.Thread(target=hourly_timer_thread, daemon=True).start()
+    threading.Thread(target=session_and_hourly_worker, daemon=True).start()
     
     threads = []
     for w_id in range(1, num_workers + 1):
