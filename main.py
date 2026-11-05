@@ -87,8 +87,8 @@ PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://p.webshare.io:80')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'afccanza-rotate')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', '00lox8cy2pys')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'wsbpzavv-rotate')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', '40a8xrxuzsyd')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -229,12 +229,7 @@ def get_active_proxy():
 def get_active_proxy_config():
     p = get_active_proxy()
     if not p:
-        return {
-            'server': VISITOR_PROXY_SERVER,
-            'username': VISITOR_PROXY_USER,
-            'password': VISITOR_PROXY_PASS,
-            'raw': f"{VISITOR_PROXY_SERVER.replace('http://', '').replace('https://', '')}:{VISITOR_PROXY_USER}:{VISITOR_PROXY_PASS}"
-        }
+        return None
     return {
         'server': p['server'],
         'username': p.get('username', ''),
@@ -244,13 +239,15 @@ def get_active_proxy_config():
 
 def get_rotating_visitor_proxy():
     cfg = get_active_proxy_config()
+    if not cfg:
+        return None, "No Active Proxy"
     ip_label = cfg.get('server', '').replace('http://', '').replace('https://', '').split(':')[0]
     label = f"🇺🇸 {ip_label}"
     return cfg, label
 
 # Fallback alias for components expecting PROXY_CONFIG
-VISITOR_PROXY_CONFIG = get_active_proxy_config()
-PROXY_CONFIG = VISITOR_PROXY_CONFIG
+VISITOR_PROXY_CONFIG = None
+PROXY_CONFIG = None
 
 def send_telegram_admin_alert(text):
     if not BOT_TOKEN or not REQUESTS_AVAILABLE:
@@ -339,25 +336,28 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
 def handle_proxy_error(err_str, proxy_raw):
     err_lower = (err_str or "").lower()
     
-    immediate_reasons = []
-    if "402" in err_lower or "payment required" in err_lower:
-        immediate_reasons.append("402 Payment Required (Bandwidth Exhausted)")
-    elif "407" in err_lower or "proxy auth" in err_lower:
-        immediate_reasons.append("407 Proxy Authentication Required / Expired")
-        
-    if immediate_reasons:
-        print(f"[ProxyManager] ❌ Immediate failure detected: {immediate_reasons[0]}")
-        mark_current_proxy_exhausted(proxy_raw, reason=immediate_reasons[0])
-        return
-
-    conn_signals = [
-        "net::err_tunnel_connection_failed",
-        "net::err_proxy_connection_failed",
-        "chrome-error://chromewebdata",
-        "tunnel connection failed",
-        "proxy connection failed"
+    immediate_signals = [
+        ("402", "402 Payment Required (Bandwidth Quota Exhausted)"),
+        ("payment required", "402 Payment Required (Bandwidth Quota Exhausted)"),
+        ("407", "407 Proxy Auth Required / Expired"),
+        ("proxy auth", "407 Proxy Auth Required / Expired"),
+        ("tunnel", "Tunnel Connection Failed / Closed (Proxy Quota Reached)"),
+        ("proxy connection", "Proxy Connection Failed / Refused"),
+        ("err_proxy_connection_failed", "ERR_PROXY_CONNECTION_FAILED (Proxy Dead)"),
+        ("err_connection_closed", "ERR_CONNECTION_CLOSED (Proxy Closed)"),
+        ("err_connection_reset", "ERR_CONNECTION_RESET (Proxy Reset)"),
+        ("quota", "Proxy Quota Reached"),
+        ("bandwidth", "Proxy Bandwidth Quota Exhausted"),
     ]
-    if any(sig in err_lower for sig in conn_signals):
+    
+    for needle, reason in immediate_signals:
+        if needle in err_lower:
+            print(f"[ProxyManager] ❌ Quota / Proxy failure detected instantly: {reason}")
+            mark_current_proxy_exhausted(proxy_raw, reason=reason)
+            return
+
+    # Fallback for generic connection drops
+    if "chrome-error" in err_lower or "net::err_" in err_lower:
         should_rotate = False
         with proxy_pool_lock:
             pool = load_proxy_pool()
@@ -366,12 +366,12 @@ def handle_proxy_error(err_str, proxy_raw):
                 active["fail_count"] = active.get("fail_count", 0) + 1
                 fc = active["fail_count"]
                 save_proxy_pool(pool)
-                print(f"[ProxyManager] ⚠️ Connection notice for active proxy (Fail {fc}/3): {err_str[:40]}...")
-                if fc >= 3:
+                print(f"[ProxyManager] ⚠️ Connection notice for active proxy (Fail {fc}/2): {err_str[:40]}...")
+                if fc >= 2:
                     should_rotate = True
         if should_rotate:
-            print(f"[ProxyManager] ❌ Active proxy failed 3 consecutive times. Rotating now!")
-            mark_current_proxy_exhausted(proxy_raw, reason=f"3x Connection Errors ({err_str[:30]})")
+            print(f"[ProxyManager] ❌ Active proxy connection dropped. Rotating instantly now!")
+            mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Dropped ({err_str[:30]})")
 
 def handle_proxy_success(proxy_raw):
     with proxy_pool_lock:
@@ -386,13 +386,11 @@ def add_proxies_to_pool(raw_text):
     lines = (raw_text or "").strip().splitlines()
     with proxy_pool_lock:
         pool = load_proxy_pool()
-        existing_raws = set()
+        active_or_backups = set()
         if pool.get("active"):
-            existing_raws.add(pool["active"]["raw"])
+            active_or_backups.add(pool["active"]["raw"])
         for b in pool.get("backups", []):
-            existing_raws.add(b["raw"])
-        for e in pool.get("exhausted", []):
-            existing_raws.add(e["raw"])
+            active_or_backups.add(b["raw"])
 
         added_cnt = 0
         skipped_cnt = 0
@@ -400,10 +398,12 @@ def add_proxies_to_pool(raw_text):
             p = parse_proxy_line(line)
             if not p:
                 continue
-            if p["raw"] in existing_raws:
+            if p["raw"] in active_or_backups:
                 skipped_cnt += 1
                 continue
-            existing_raws.add(p["raw"])
+            # Remove from exhausted if re-adding
+            pool["exhausted"] = [e for e in pool.get("exhausted", []) if e.get("raw") != p["raw"]]
+            active_or_backups.add(p["raw"])
             p["added_at"] = time.time()
             p["fail_count"] = 0
             if not pool.get("active"):
@@ -960,7 +960,14 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
             
             try:
                 page.goto(short_url, wait_until='domcontentloaded', timeout=25000)
-            except Exception:
+            except Exception as e_nav:
+                err_nav_str = str(e_nav).lower()
+                if any(x in err_nav_str for x in ["tunnel", "proxy", "402", "407", "net::err_"]):
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                    return False, f"Proxy Navigation Error: {str(e_nav)}"
                 page.goto(short_url, wait_until='commit', timeout=25000)
             
             # Fast check: If Cloudflare challenge page is served, skip immediately to next rotating IP
