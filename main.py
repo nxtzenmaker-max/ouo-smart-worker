@@ -708,40 +708,57 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
                 is_go_page = False
                 
             if is_go_page:
-                for _ in range(15):
+                # Wait up to 10s for countdown disabled flag to clear
+                for _ in range(10):
                     time.sleep(1)
                     try:
-                        if 'ouo.io' not in page.url and 'ouo.press' not in page.url:
+                        cur_u = page.url
+                        if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u:
                             break
                         btn2 = page.query_selector('#btn-main')
                         if btn2:
                             cls = btn2.get_attribute('class') or ''
                             if 'disabled' not in cls:
-                                time.sleep(random.uniform(0.6, 1.2))
-                                try:
-                                    btn2.click(force=True, timeout=5000)
-                                except Exception:
-                                    pass
                                 break
                     except Exception:
-                        continue
+                        pass
+                
+                # Click GET LINK (retry twice because first click can trigger ad popunder)
+                for _ in range(3):
+                    try:
+                        cur_u = page.url
+                        if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u:
+                            break
+                        btn2 = page.query_selector('#btn-main')
+                        if btn2:
+                            btn2.click(force=True, timeout=4000)
+                            time.sleep(random.uniform(1.0, 1.8))
+                    except Exception:
+                        pass
+                    # If still on /go/ page, submit form directly
+                    try:
+                        if '/go/' in page.url:
+                            page.evaluate('() => { const f = document.querySelector("#form-go") || document.querySelector("form"); if (f) f.submit(); }')
+                            time.sleep(1.2)
+                    except Exception:
+                        pass
             
             # Wait for destination navigation with fallback
             try:
                 final_url = page.url
             except Exception:
                 final_url = ""
-            for i in range(15):
+            for i in range(12):
                 time.sleep(1)
                 try:
                     cur_u = page.url
                     if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u:
                         final_url = cur_u
-                        time.sleep(random.uniform(1.2, 2.0))
+                        time.sleep(random.uniform(1.0, 1.5))
                         break
-                    if i >= 3 and ('/go/' in cur_u):
+                    if i >= 2 and ('/go/' in cur_u):
                         try:
-                            page.evaluate('() => { const f = document.querySelector("#form-go"); if (f) f.submit(); }')
+                            page.evaluate('() => { const f = document.querySelector("#form-go") || document.querySelector("form"); if (f) f.submit(); }')
                         except Exception:
                             pass
                 except Exception:
