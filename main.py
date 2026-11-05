@@ -1007,19 +1007,17 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
         try:
             page.goto(short_url, wait_until='domcontentloaded', timeout=18000)
         except Exception as e_nav:
-            err_nav_str = str(e_nav).lower()
-            if any(x in err_nav_str for x in ["tunnel", "proxy", "402", "407", "net::err_"]):
+            try:
+                context.close()
+            except Exception:
+                pass
+            if temp_browser:
                 try:
-                    context.close()
+                    temp_browser.close()
+                    temp_pw.stop()
                 except Exception:
                     pass
-                if temp_browser:
-                    try:
-                        temp_browser.close()
-                        temp_pw.stop()
-                    except Exception:
-                        pass
-                return False, f"Proxy Navigation Error: {str(e_nav)}"
+            return False, f"Navigation Error: {str(e_nav)}"
 
         # Fast Cloudflare check (2s max)
         for _ in range(2):
@@ -1737,6 +1735,7 @@ def run_telegram_bot():
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=15)
+            time.sleep(5)
         except Exception as e:
             print(f"[!] Bot polling error: {e}. Retrying in 5 seconds...")
             time.sleep(5)
@@ -1872,8 +1871,7 @@ if __name__ == '__main__':
     if len(sys.argv) == 1 and os.environ.get("PORT"):
         print("[*] Cloud environment detected (PORT set). Auto-launching: daemon + bot + health server")
         threading.Thread(target=run_health_server, daemon=True).start()
-        d_thread = threading.Thread(target=run_multi_worker_daemon, kwargs={"num_workers": NUM_WORKERS, "blocking": False}, daemon=True)
-        d_thread.start()
-        run_telegram_bot()
+        threading.Thread(target=run_telegram_bot, daemon=True).start()
+        run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True)
     else:
         main()
