@@ -84,30 +84,31 @@ SESSION_FILE = resolve_path("ouo_session.json", "/home/ipx/ouo_session.json")
 STATS_FILE = resolve_path("campaign_stats.json", "/home/ipx/campaign_stats.json")
 AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 
-# Dedicated Rotating Residential Proxies for visitor traffic (US Only)
-VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://gw.proxyrise.com:443')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'pgw-08e31e1cc8432fd2889c36462754d0e839f5178a3b0991b8')
+# Dedicated Rotating Proxies for visitor traffic (Webshare)
+VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://45.3.36.165:3129')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'wd9bk2kmqzud-rotate')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'y6n0kil99dzj5qm')
 
 def get_rotating_visitor_proxy():
     cfg = {
         'server': VISITOR_PROXY_SERVER,
-        'username': 'res-us-rotate',
+        'username': VISITOR_PROXY_USER,
         'password': VISITOR_PROXY_PASS
     }
-    return cfg, "🇺🇸 US"
+    return cfg, "🇺🇸 US (Webshare)"
 
 VISITOR_PROXY_CONFIG = {
     'server': VISITOR_PROXY_SERVER,
-    'username': 'res-us-rotate',
+    'username': VISITOR_PROXY_USER,
     'password': VISITOR_PROXY_PASS
 }
 
-# Use Residential Proxy by default for login, dashboard & shortener to bypass Cloudflare on Railway/Cloud
+# Proxy for login, dashboard & shortener
 PROXY_CONFIG = VISITOR_PROXY_CONFIG
 if os.environ.get('OUO_PROXY_SERVER'):
     PROXY_CONFIG = {
         'server': os.environ.get('OUO_PROXY_SERVER'),
-        'username': os.environ.get('OUO_PROXY_USER', 'res-us-rotate'),
+        'username': os.environ.get('OUO_PROXY_USER', VISITOR_PROXY_USER),
         'password': os.environ.get('OUO_PROXY_PASS', VISITOR_PROXY_PASS)
     }
 
