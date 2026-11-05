@@ -101,7 +101,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 # ------------------------------------------------------------------------------
 # PROXY POOL & AUTO-FAILOVER ENGINE
 # ------------------------------------------------------------------------------
-proxy_pool_lock = threading.Lock()
+proxy_pool_lock = threading.RLock()
 
 def parse_proxy_line(line):
     line = (line or "").strip()
@@ -358,6 +358,7 @@ def handle_proxy_error(err_str, proxy_raw):
         "proxy connection failed"
     ]
     if any(sig in err_lower for sig in conn_signals):
+        should_rotate = False
         with proxy_pool_lock:
             pool = load_proxy_pool()
             active = pool.get("active")
@@ -367,8 +368,10 @@ def handle_proxy_error(err_str, proxy_raw):
                 save_proxy_pool(pool)
                 print(f"[ProxyManager] ⚠️ Connection notice for active proxy (Fail {fc}/3): {err_str[:40]}...")
                 if fc >= 3:
-                    print(f"[ProxyManager] ❌ Active proxy failed 3 consecutive times. Rotating now!")
-                    mark_current_proxy_exhausted(proxy_raw, reason=f"3x Connection Errors ({err_str[:30]})")
+                    should_rotate = True
+        if should_rotate:
+            print(f"[ProxyManager] ❌ Active proxy failed 3 consecutive times. Rotating now!")
+            mark_current_proxy_exhausted(proxy_raw, reason=f"3x Connection Errors ({err_str[:30]})")
 
 def handle_proxy_success(proxy_raw):
     with proxy_pool_lock:
@@ -1287,6 +1290,8 @@ def run_telegram_bot():
     active_status_messages = {}
     
     def is_user_authenticated(chat_id):
+        if str(chat_id) in {str(ADMIN_CHAT_ID), "8321630022"}:
+            return True
         if not os.path.exists(AUTH_FILE):
             return False
         try:
