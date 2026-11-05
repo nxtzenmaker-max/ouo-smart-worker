@@ -18,7 +18,7 @@ COPY . .
 
 # Railway free plan memory-safe workers
 ENV PYTHONUNBUFFERED=1
-ENV OUO_WORKERS=4
+ENV OUO_WORKERS=2
 
 # Railway injects PORT automatically
 EXPOSE 8080

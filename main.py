@@ -437,7 +437,7 @@ DEFAULT_CHROMIUM_ARGS = [
 ]
 
 HOURLY_CHECK_INTERVAL = 300  # Check every 5 minutes
-NUM_WORKERS = int(os.environ.get("OUO_WORKERS", 40))
+NUM_WORKERS = int(os.environ.get("OUO_WORKERS", 2))
 SESSION_LIFETIME = 86400      # 24 Hours
 
 # Concurrency Locks & Flags
@@ -906,222 +906,231 @@ def shorten_target(target_url, cookies_path=None):
 # 6. NATURAL AD-ENABLED VISITOR ENGINE (ouo_visitor.py)
 # ------------------------------------------------------------------------------
 
-def visit_shortlink(short_url, worker_id=1, proxy=None):
+def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
     """Simulates realistic human visit with natural ad scrolling & timer bypass"""
     if not PLAYWRIGHT_AVAILABLE:
         print("[-] Error: 'playwright' is not installed. Run: pip install -r requirements.txt && playwright install chromium")
         return False, "Playwright not installed"
     use_proxy = proxy or VISITOR_PROXY_CONFIG
+    
+    clean_proxy = None
+    if use_proxy and isinstance(use_proxy, dict) and use_proxy.get('server'):
+        clean_proxy = {'server': use_proxy['server']}
+        if use_proxy.get('username'):
+            clean_proxy['username'] = use_proxy['username']
+        if use_proxy.get('password'):
+            clean_proxy['password'] = use_proxy['password']
+
+    temp_pw = None
+    temp_browser = None
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
+        if browser:
+            active_browser = browser
+        else:
+            temp_pw = sync_playwright().start()
+            temp_browser = temp_pw.chromium.launch(
                 headless=True,
                 args=DEFAULT_CHROMIUM_ARGS,
                 ignore_default_args=['--enable-automation']
             )
-            context = browser.new_context(
-                proxy=use_proxy,
-                user_agent=USER_AGENT,
-                viewport={'width': 1280, 'height': 720}
-            )
-            context.add_init_script('''
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                window.chrome = { runtime: {} };
-            ''')
-            
-            page = context.new_page()
-            # Ultra Bandwidth Saver 1: Close ad popups immediately before they download video/banners
-            def handle_ad_popup(pop):
-                try:
-                    pop.close()
-                except Exception:
-                    pass
-            page.on("popup", handle_ad_popup)
-            context.on("page", lambda p: handle_ad_popup(p) if p != page else None)
+            active_browser = temp_browser
 
-            # Ultra Bandwidth Saver 2: Block images, media, fonts, and heavy ad video networks
-            def ultra_bandwidth_filter(route):
-                try:
-                    req = route.request
-                    if 'ouo.io' in req.url or 'ouo.press' in req.url or 'cloudflare.com' in req.url:
-                        return route.continue_()
-                    if req.resource_type in ["image", "media", "font"]:
-                        return route.abort()
-                    url_l = req.url.lower()
-                    heavy_ad_hosts = [
-                        "doubleclick", "googlesyndication", "popads", "adcash",
-                        "exoclick", "propellerads", "adsterra", "trafficjunky",
-                        "adnxs", "creativecdn", "adservice", "analytics", ".mp4", ".webm",
-                        "video", "vast", "banner", "cpmstar"
-                    ]
-                    if any(h in url_l for h in heavy_ad_hosts):
+        context = active_browser.new_context(
+            proxy=clean_proxy,
+            user_agent=USER_AGENT,
+            viewport={'width': 1280, 'height': 720}
+        )
+        context.add_init_script('''
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = { runtime: {} };
+        ''')
+        
+        page = context.new_page()
+        
+        # Bandwidth Saver 1: Close ad popups instantly before video/banner ads stream
+        def handle_ad_popup(pop):
+            try:
+                pop.close()
+            except Exception:
+                pass
+        page.on("popup", handle_ad_popup)
+        context.on("page", lambda p: handle_ad_popup(p) if p != page else None)
+
+        # Bandwidth Saver 2: Ultra Resource & Data Filter (Saves 95% proxy bandwidth)
+        def ultra_bandwidth_filter(route):
+            try:
+                req = route.request
+                # If already leaving ouo, abort everything so destination page doesn't download 15MB!
+                if 'ouo.io' not in req.url and 'ouo.press' not in req.url:
+                    if req.resource_type in ["image", "media", "font", "stylesheet", "other"]:
                         return route.abort()
                     return route.continue_()
-                except Exception:
-                    pass
 
-            try:
-                page.route("**/*", ultra_bandwidth_filter)
+                # On ouo.io: Block images, video, audio, fonts
+                if req.resource_type in ["image", "media", "font"]:
+                    return route.abort()
+
+                url_l = req.url.lower()
+                heavy_ad_hosts = [
+                    "doubleclick", "googlesyndication", "popads", "adcash",
+                    "exoclick", "propellerads", "adsterra", "trafficjunky",
+                    "adnxs", "creativecdn", "adservice", "analytics", ".mp4", ".webm",
+                    "video", "vast", "banner", "cpmstar", "taboola", "outbrain", "yandex"
+                ]
+                if any(h in url_l for h in heavy_ad_hosts):
+                    return route.abort()
+                return route.continue_()
             except Exception:
-                pass
-            
-            try:
-                page.goto(short_url, wait_until='domcontentloaded', timeout=25000)
-            except Exception as e_nav:
-                err_nav_str = str(e_nav).lower()
-                if any(x in err_nav_str for x in ["tunnel", "proxy", "402", "407", "net::err_"]):
-                    try:
-                        browser.close()
-                    except Exception:
-                        pass
-                    return False, f"Proxy Navigation Error: {str(e_nav)}"
-                page.goto(short_url, wait_until='commit', timeout=25000)
-            
-            # Fast check: If Cloudflare challenge page is served, skip immediately to next rotating IP
-            for _ in range(5):
+                return route.abort()
+
+        try:
+            page.route("**/*", ultra_bandwidth_filter)
+        except Exception:
+            pass
+
+        try:
+            page.goto(short_url, wait_until='domcontentloaded', timeout=18000)
+        except Exception as e_nav:
+            err_nav_str = str(e_nav).lower()
+            if any(x in err_nav_str for x in ["tunnel", "proxy", "402", "407", "net::err_"]):
                 try:
-                    t = page.title()
-                    if 'Just a moment' not in t and t != '':
-                        break
-                except Exception:
-                    break
-                time.sleep(1)
-                
-            try:
-                cur_t = page.title()
-                if 'Just a moment' in cur_t:
-                    browser.close()
-                    return False, "Cloudflare Challenge on IP (Rotating to fresh IP)"
-            except Exception:
-                pass
-                    
-            # Natural scrolling
-            try:
-                scroll_y = random.randint(200, 450)
-                page.mouse.wheel(0, scroll_y)
-                time.sleep(random.uniform(0.6, 1.2))
-            except Exception:
-                pass
-                
-            # Step 1: Click "I'M A HUMAN" and ensure transition to /go/
-            for _ in range(3):
-                try:
-                    cur_u = page.url
-                    if '/go/' in cur_u or ('ouo.io' not in cur_u and 'ouo.press' not in cur_u):
-                        break
-                except Exception:
-                    break
-                try:
-                    btn1 = page.wait_for_selector('#btn-main', timeout=5000)
-                    if btn1:
-                        time.sleep(random.uniform(0.5, 1.0))
-                        btn1.click(force=True, timeout=4000)
+                    context.close()
                 except Exception:
                     pass
-                    
-                try:
-                    page.wait_for_url(lambda u: '/go/' in u or ('ouo.io' not in u and 'ouo.press' not in u), timeout=5000)
-                except Exception:
-                    # Robust fallback to direct form submit (immune to submit element naming bugs)
+                if temp_browser:
                     try:
-                        page.evaluate('''() => {
-                            const f = document.querySelector("#form-captcha") || document.querySelector("form");
-                            if (f) {
-                                try { HTMLFormElement.prototype.submit.call(f); } catch(e) { if (typeof f.submit === 'function') f.submit(); }
-                            }
-                        }''')
-                        page.wait_for_url(lambda u: '/go/' in u or ('ouo.io' not in u and 'ouo.press' not in u), timeout=4000)
+                        temp_browser.close()
+                        temp_pw.stop()
                     except Exception:
                         pass
+                return False, f"Proxy Navigation Error: {str(e_nav)}"
+
+        # Fast Cloudflare check (2s max)
+        for _ in range(2):
+            try:
+                t = page.title()
+                if 'Just a moment' not in t and t != '':
+                    break
+            except Exception:
+                break
+            time.sleep(1)
+
+        try:
+            cur_t = page.title()
+            if 'Just a moment' in cur_t:
                 try:
-                    page.bring_to_front()
+                    context.close()
                 except Exception:
                     pass
-            
-            # Step 2: On /go/ page, wait for countdown and click GET LINK
+                if temp_browser:
+                    try:
+                        temp_browser.close()
+                        temp_pw.stop()
+                    except Exception:
+                        pass
+                return False, "Cloudflare Challenge on IP (Rotating to fresh IP)"
+        except Exception:
+            pass
+
+        # Step 1: Click "I'M A HUMAN" and transition to /go/
+        try:
+            btn1 = page.wait_for_selector('#btn-main', timeout=3500)
+            if btn1:
+                btn1.click(force=True, timeout=2500)
+        except Exception:
+            pass
+
+        try:
+            page.wait_for_url(lambda u: '/go/' in u or ('ouo.io' not in u and 'ouo.press' not in u), timeout=3000)
+        except Exception:
             try:
-                is_go_page = '/go/' in page.url
+                page.evaluate('''() => {
+                    const f = document.querySelector("#form-captcha") || document.querySelector("form");
+                    if (f) {
+                        try { HTMLFormElement.prototype.submit.call(f); } catch(e) { if (typeof f.submit === 'function') f.submit(); }
+                    }
+                }''')
+                page.wait_for_url(lambda u: '/go/' in u or ('ouo.io' not in u and 'ouo.press' not in u), timeout=2500)
             except Exception:
-                is_go_page = False
-                
-            if is_go_page:
-                # Wait up to 10s for countdown disabled flag to clear
-                for _ in range(10):
-                    time.sleep(1)
-                    try:
-                        cur_u = page.url
-                        if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u:
-                            break
-                        btn2 = page.query_selector('#btn-main')
-                        if btn2:
-                            cls = btn2.get_attribute('class') or ''
-                            if 'disabled' not in cls:
-                                break
-                    except Exception:
-                        pass
-                
-                # Click GET LINK (retry up to 3 times to bypass ad popunders)
-                for _ in range(3):
-                    try:
-                        cur_u = page.url
-                        if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u:
-                            break
-                        btn2 = page.query_selector('#btn-main')
-                        if btn2:
-                            btn2.click(force=True, timeout=4000)
-                            time.sleep(random.uniform(1.0, 1.6))
-                    except Exception:
-                        pass
-                    # If still on /go/ page, submit form directly via prototype
-                    try:
-                        if '/go/' in page.url:
-                            page.evaluate('''() => {
-                                const f = document.querySelector("#form-go") || document.querySelector("form");
-                                if (f) {
-                                    try { HTMLFormElement.prototype.submit.call(f); } catch(e) { if (typeof f.submit === 'function') f.submit(); }
-                                }
-                            }''')
-                            time.sleep(1.2)
-                    except Exception:
-                        pass
-            
-            # Wait for destination navigation with fallback
-            try:
-                final_url = page.url
-            except Exception:
-                final_url = ""
-            for i in range(10):
+                pass
+
+        # Step 2: On /go/ page, wait for countdown and click GET LINK
+        try:
+            is_go_page = '/go/' in page.url
+        except Exception:
+            is_go_page = False
+
+        if is_go_page:
+            for _ in range(4):
                 time.sleep(1)
                 try:
                     cur_u = page.url
                     if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u:
-                        final_url = cur_u
-                        time.sleep(random.uniform(0.8, 1.4))
                         break
-                    if i >= 2 and ('/go/' in cur_u):
-                        try:
-                            page.evaluate('''() => {
-                                const f = document.querySelector("#form-go") || document.querySelector("form");
-                                if (f) {
-                                    try { HTMLFormElement.prototype.submit.call(f); } catch(e) { if (typeof f.submit === 'function') f.submit(); }
-                                }
-                            }''')
-                        except Exception:
-                            pass
+                    btn2 = page.query_selector('#btn-main')
+                    if btn2:
+                        cls = btn2.get_attribute('class') or ''
+                        if 'disabled' not in cls:
+                            break
                 except Exception:
-                    continue
-                    
+                    pass
+
             try:
-                page.unroute("**/*")
+                btn2 = page.query_selector('#btn-main')
+                if btn2:
+                    btn2.click(force=True, timeout=2500)
             except Exception:
                 pass
+
             try:
-                browser.close()
+                if '/go/' in page.url:
+                    page.evaluate('''() => {
+                        const f = document.querySelector("#form-go") || document.querySelector("form");
+                        if (f) {
+                            try { HTMLFormElement.prototype.submit.call(f); } catch(e) { if (typeof f.submit === 'function') f.submit(); }
+                        }
+                    }''')
             except Exception:
                 pass
-            is_valid = 'ouo.io' not in final_url and 'ouo.press' not in final_url and 'chrome-error' not in final_url
-            return is_valid, final_url
+
+        # Destination Early-Exit: As soon as redirect happens, exit immediately!
+        final_url = ""
+        for _ in range(5):
+            time.sleep(0.7)
+            try:
+                cur_u = page.url
+                if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u and 'chrome-error' not in cur_u:
+                    final_url = cur_u
+                    break
+            except Exception:
+                pass
+
+        try:
+            if not final_url:
+                final_url = page.url
+        except Exception:
+            final_url = ""
+
+        try:
+            context.close()
+        except Exception:
+            pass
+        if temp_browser:
+            try:
+                temp_browser.close()
+                temp_pw.stop()
+            except Exception:
+                pass
+
+        is_valid = 'ouo.io' not in final_url and 'ouo.press' not in final_url and 'chrome-error' not in final_url
+        return is_valid, final_url
     except Exception as e:
+        if temp_browser:
+            try:
+                temp_browser.close()
+                temp_pw.stop()
+            except Exception:
+                pass
         return False, str(e)
 
 # ------------------------------------------------------------------------------
@@ -1196,36 +1205,50 @@ def get_shortlink_from_pool():
     return random.choice(HARDCODED_LINKS)
 
 def worker_routine(worker_id):
-    print(f"[Worker #{worker_id}] Initialized and active.")
-    while daemon_running:
-        try:
-            short_url = get_shortlink_from_pool()
-            if not short_url:
-                time.sleep(4)
-                continue
+    print(f"[Worker #{worker_id}] ⚡ Starting fast persistent browser...")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=DEFAULT_CHROMIUM_ARGS,
+                ignore_default_args=['--enable-automation']
+            )
+            print(f"[Worker #{worker_id}] 🚀 Fast Worker Active! Processing paid visits...")
+            while daemon_running:
+                try:
+                    short_url = get_shortlink_from_pool()
+                    if not short_url:
+                        time.sleep(2)
+                        continue
 
-            proxy_cfg, country_label = get_rotating_visitor_proxy()
-            if not proxy_cfg or not proxy_cfg.get('server'):
-                print(f"[Worker #{worker_id}] ⚠️ No active proxy available in pool. Waiting 15s...")
-                time.sleep(15)
-                continue
+                    proxy_cfg, country_label = get_rotating_visitor_proxy()
+                    if not proxy_cfg or not proxy_cfg.get('server'):
+                        print(f"[Worker #{worker_id}] ⚠️ No active proxy available in pool. Waiting 10s...")
+                        time.sleep(10)
+                        continue
 
-            raw_proxy = proxy_cfg.get('raw')
-            ok, dest = visit_shortlink(short_url, worker_id=worker_id, proxy=proxy_cfg)
-            record_view_result(ok, short_url, dest, country=f"{country_label} (Rotating Residential)")
+                    raw_proxy = proxy_cfg.get('raw')
+                    ok, dest = visit_shortlink(short_url, worker_id=worker_id, proxy=proxy_cfg, browser=browser)
+                    record_view_result(ok, short_url, dest, country=f"{country_label} (Rotating Residential)")
 
-            if ok:
-                handle_proxy_success(raw_proxy)
-                print(f"[Worker #{worker_id}] ✅ Paid View Verified ({country_label}) on {short_url}!")
-            else:
-                handle_proxy_error(dest, raw_proxy)
-                print(f"[Worker #{worker_id}] ⚠️ View ended on {short_url}: {dest[:45]}...")
+                    if ok:
+                        handle_proxy_success(raw_proxy)
+                        print(f"[Worker #{worker_id}] ✅ Paid View Verified ({country_label}) -> {dest[:45]}!")
+                    else:
+                        handle_proxy_error(dest, raw_proxy)
+                        print(f"[Worker #{worker_id}] ℹ️ Cycle ended on {short_url}: {dest[:45]}...")
 
-            worker_sleep = random.uniform(3.0, 10.0)
-            time.sleep(worker_sleep)
-        except Exception as e:
-            print(f"[Worker #{worker_id}] Error: {e}")
-            time.sleep(6)
+                    worker_sleep = random.uniform(1.5, 3.5)
+                    time.sleep(worker_sleep)
+                except Exception as e:
+                    print(f"[Worker #{worker_id}] Cycle error: {e}")
+                    time.sleep(3)
+            try:
+                browser.close()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[Worker #{worker_id}] Fatal worker error: {e}")
 
 def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
     global daemon_running
@@ -1236,7 +1259,7 @@ def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
     print(f"👥 Concurrent Workers: {num_workers} Parallel Playwright Instances")
     print("📡 Visitor Proxy: US Residential Rotating (res-us-rotate)")
     print(f"🔗 Fixed Hardcoded Links: {', '.join(HARDCODED_LINKS)}")
-    print("⏱️ Dashboard Check: Hourly Cached Snapshot")
+    print("⏱️ Mode: Fast Incognito Persistent Browsers (Zero Cold-Start)")
     print("=======================================================\n")
     
     stats = load_stats()
@@ -1247,19 +1270,8 @@ def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
     save_stats(stats)
     
     def session_and_hourly_worker():
-        time.sleep(15)
-        try:
-            if not check_session_validity():
-                do_login()
-        except Exception as e:
-            print(f"[!] Session initialization error: {e}")
-        try:
-            check_ouo_dashboard_hourly()
-        except Exception as e:
-            print(f"[!] Initial dashboard check error: {e}")
-            
         while daemon_running:
-            time.sleep(60)
+            time.sleep(1800)
             try:
                 check_ouo_dashboard_hourly()
             except Exception:
@@ -1271,7 +1283,7 @@ def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
         t = threading.Thread(target=worker_routine, args=(w_id,), daemon=True)
         t.start()
         threads.append(t)
-        time.sleep(random.uniform(2.5, 4.0))
+        time.sleep(0.5)
         
     print(f"[+] All {num_workers} Workers successfully dispatched! Running 24/7.")
     
