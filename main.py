@@ -83,34 +83,12 @@ def resolve_path(filename, legacy_path=None):
 SESSION_FILE = resolve_path("ouo_session.json", "/home/ipx/ouo_session.json")
 STATS_FILE = resolve_path("campaign_stats.json", "/home/ipx/campaign_stats.json")
 AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
+PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
-# Dedicated Rotating Proxies for visitor traffic (Webshare)
+# Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://p.webshare.io:80')
 VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'afccanza-rotate')
 VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', '00lox8cy2pys')
-
-def get_rotating_visitor_proxy():
-    cfg = {
-        'server': VISITOR_PROXY_SERVER,
-        'username': VISITOR_PROXY_USER,
-        'password': VISITOR_PROXY_PASS
-    }
-    return cfg, "🇺🇸 US (Webshare Rotating)"
-
-VISITOR_PROXY_CONFIG = {
-    'server': VISITOR_PROXY_SERVER,
-    'username': VISITOR_PROXY_USER,
-    'password': VISITOR_PROXY_PASS
-}
-
-# Proxy for login, dashboard & shortener
-PROXY_CONFIG = VISITOR_PROXY_CONFIG
-if os.environ.get('OUO_PROXY_SERVER'):
-    PROXY_CONFIG = {
-        'server': os.environ.get('OUO_PROXY_SERVER'),
-        'username': os.environ.get('OUO_PROXY_USER', VISITOR_PROXY_USER),
-        'password': os.environ.get('OUO_PROXY_PASS', VISITOR_PROXY_PASS)
-    }
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -119,6 +97,295 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', "8943552749:AAEq10g6coSpFo39pQHzJO0ja9K1
 DEFAULT_VERCEL_APP = os.environ.get('VERCEL_APP_URL', "https://ouo-portal.vercel.app")
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', "8321630022")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+# ------------------------------------------------------------------------------
+# PROXY POOL & AUTO-FAILOVER ENGINE
+# ------------------------------------------------------------------------------
+proxy_pool_lock = threading.Lock()
+
+def parse_proxy_line(line):
+    line = (line or "").strip()
+    if not line or line.startswith('#') or line.startswith('//'):
+        return None
+    for prefix in ['http://', 'https://', 'socks5://', 'socks4://']:
+        if line.startswith(prefix):
+            line = line[len(prefix):]
+    if '@' in line:
+        try:
+            auth_part, host_part = line.rsplit('@', 1)
+            u_p = auth_part.split(':', 1)
+            h_p = host_part.split(':', 1)
+            if len(u_p) == 2 and len(h_p) == 2 and h_p[1].isdigit():
+                user, pwd = u_p
+                ip, port = h_p
+                return {
+                    'server': f'http://{ip}:{port}',
+                    'ip': ip,
+                    'port': port,
+                    'username': user,
+                    'password': pwd,
+                    'raw': f'{ip}:{port}:{user}:{pwd}'
+                }
+        except Exception:
+            return None
+    parts = line.split(':', 3)
+    if len(parts) == 4 and parts[1].isdigit():
+        ip, port, user, pwd = parts
+        return {
+            'server': f'http://{ip}:{port}',
+            'ip': ip,
+            'port': port,
+            'username': user,
+            'password': pwd,
+            'raw': f'{ip}:{port}:{user}:{pwd}'
+        }
+    elif len(parts) == 2 and parts[1].isdigit():
+        ip, port = parts
+        return {
+            'server': f'http://{ip}:{port}',
+            'ip': ip,
+            'port': port,
+            'username': '',
+            'password': '',
+            'raw': f'{ip}:{port}'
+        }
+    return None
+
+def load_proxy_pool():
+    if os.path.exists(PROXIES_FILE):
+        try:
+            with open(PROXIES_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and "active" in data:
+                    return data
+        except Exception as e:
+            print(f"[!] Error loading proxy pool: {e}")
+            
+    default_ip = VISITOR_PROXY_SERVER.replace("http://", "").replace("https://", "").split(":")[0]
+    default_port = VISITOR_PROXY_SERVER.split(":")[-1] if ":" in VISITOR_PROXY_SERVER else "80"
+    default_raw = f"{default_ip}:{default_port}:{VISITOR_PROXY_USER}:{VISITOR_PROXY_PASS}"
+    pool = {
+        "active": {
+            "server": VISITOR_PROXY_SERVER,
+            "ip": default_ip,
+            "port": default_port,
+            "username": VISITOR_PROXY_USER,
+            "password": VISITOR_PROXY_PASS,
+            "raw": default_raw,
+            "added_at": time.time(),
+            "fail_count": 0
+        },
+        "backups": [],
+        "exhausted": []
+    }
+    save_proxy_pool(pool)
+    return pool
+
+def save_proxy_pool(pool):
+    try:
+        os.makedirs(os.path.dirname(PROXIES_FILE), exist_ok=True)
+        with open(PROXIES_FILE, 'w') as f:
+            json.dump(pool, f, indent=2)
+    except Exception as e:
+        print(f"[!] Error saving proxy pool: {e}")
+
+def get_active_proxy():
+    with proxy_pool_lock:
+        pool = load_proxy_pool()
+        if pool.get("active"):
+            return pool["active"]
+        backups = pool.get("backups", [])
+        if backups:
+            pool["active"] = backups.pop(0)
+            save_proxy_pool(pool)
+            return pool["active"]
+    return None
+
+def get_active_proxy_config():
+    p = get_active_proxy()
+    if not p:
+        return {
+            'server': VISITOR_PROXY_SERVER,
+            'username': VISITOR_PROXY_USER,
+            'password': VISITOR_PROXY_PASS,
+            'raw': f"{VISITOR_PROXY_SERVER.replace('http://', '').replace('https://', '')}:{VISITOR_PROXY_USER}:{VISITOR_PROXY_PASS}"
+        }
+    return {
+        'server': p['server'],
+        'username': p.get('username', ''),
+        'password': p.get('password', ''),
+        'raw': p.get('raw', '')
+    }
+
+def get_rotating_visitor_proxy():
+    cfg = get_active_proxy_config()
+    ip_label = cfg.get('server', '').replace('http://', '').replace('https://', '').split(':')[0]
+    label = f"🇺🇸 {ip_label}"
+    return cfg, label
+
+# Fallback alias for components expecting PROXY_CONFIG
+VISITOR_PROXY_CONFIG = get_active_proxy_config()
+PROXY_CONFIG = VISITOR_PROXY_CONFIG
+
+def send_telegram_admin_alert(text):
+    if not BOT_TOKEN or not REQUESTS_AVAILABLE:
+        return
+    targets = set()
+    if ADMIN_CHAT_ID:
+        targets.add(str(ADMIN_CHAT_ID))
+    targets.add("8321630022")
+    if os.path.exists(AUTH_FILE):
+        try:
+            with open(AUTH_FILE, 'r') as f:
+                data = json.load(f)
+            now = time.time()
+            for cid, auth_t in data.items():
+                if (now - auth_t) < SESSION_LIFETIME:
+                    targets.add(str(cid))
+        except Exception:
+            pass
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    for cid in targets:
+        try:
+            requests.post(url, json={
+                "chat_id": cid,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True
+            }, timeout=8)
+        except Exception as e:
+            print(f"[!] Alert delivery error to {cid}: {e}")
+
+def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"):
+    with proxy_pool_lock:
+        pool = load_proxy_pool()
+        current = pool.get("active")
+        if not current:
+            return None
+        if dead_raw and current.get("raw") != dead_raw:
+            return pool.get("active")
+            
+        current["exhausted_at"] = time.time()
+        current["reason"] = reason
+        pool.setdefault("exhausted", []).append(current)
+        
+        dead_desc = current.get("raw", "unknown")
+        backups = pool.get("backups", [])
+        if backups:
+            new_active = backups.pop(0)
+            pool["active"] = new_active
+            save_proxy_pool(pool)
+            print(f"[ProxyManager] 🔄 Switched active proxy from {dead_desc} to {new_active.get('raw')}")
+            
+            alert_msg = (
+                "⚠️ <b>ROX AI — Proxy Over Alert!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"❌ <b>proxy over, proxy - <code>{dead_desc}</code></b>\n"
+                f"ℹ️ <b>Reason:</b> {reason}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🔄 <b>Auto-failover activated:</b>\n"
+                f"🟢 <b>New Active Proxy:</b> <code>{new_active.get('raw')}</code>\n"
+                f"📦 <b>Remaining Backups:</b> <code>{len(backups)}</code> ready in pool\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Tip: Send new proxies via /admin if you want to add more backups!</i>"
+            )
+            threading.Thread(target=send_telegram_admin_alert, args=(alert_msg,), daemon=True).start()
+            return new_active
+        else:
+            pool["active"] = None
+            save_proxy_pool(pool)
+            print(f"[ProxyManager] 🚨 All proxies exhausted! No backup left in pool.")
+            alert_msg = (
+                "🚨 <b>ROX AI — ALL PROXIES OVER!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"❌ <b>proxy over, proxy - <code>{dead_desc}</code></b>\n"
+                f"ℹ️ <b>Reason:</b> {reason}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⚠️ <b>Proxy pool is now EMPTY!</b>\n"
+                "Background workers are waiting for proxies.\n"
+                "Please send new proxies to bot now:\n"
+                "Format: <code>ip:port:username:password</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            threading.Thread(target=send_telegram_admin_alert, args=(alert_msg,), daemon=True).start()
+            return None
+
+def handle_proxy_error(err_str, proxy_raw):
+    err_lower = (err_str or "").lower()
+    
+    immediate_reasons = []
+    if "402" in err_lower or "payment required" in err_lower:
+        immediate_reasons.append("402 Payment Required (Bandwidth Exhausted)")
+    elif "407" in err_lower or "proxy auth" in err_lower:
+        immediate_reasons.append("407 Proxy Authentication Required / Expired")
+        
+    if immediate_reasons:
+        print(f"[ProxyManager] ❌ Immediate failure detected: {immediate_reasons[0]}")
+        mark_current_proxy_exhausted(proxy_raw, reason=immediate_reasons[0])
+        return
+
+    conn_signals = [
+        "net::err_tunnel_connection_failed",
+        "net::err_proxy_connection_failed",
+        "chrome-error://chromewebdata",
+        "tunnel connection failed",
+        "proxy connection failed"
+    ]
+    if any(sig in err_lower for sig in conn_signals):
+        with proxy_pool_lock:
+            pool = load_proxy_pool()
+            active = pool.get("active")
+            if active and (not proxy_raw or active.get("raw") == proxy_raw):
+                active["fail_count"] = active.get("fail_count", 0) + 1
+                fc = active["fail_count"]
+                save_proxy_pool(pool)
+                print(f"[ProxyManager] ⚠️ Connection notice for active proxy (Fail {fc}/3): {err_str[:40]}...")
+                if fc >= 3:
+                    print(f"[ProxyManager] ❌ Active proxy failed 3 consecutive times. Rotating now!")
+                    mark_current_proxy_exhausted(proxy_raw, reason=f"3x Connection Errors ({err_str[:30]})")
+
+def handle_proxy_success(proxy_raw):
+    with proxy_pool_lock:
+        pool = load_proxy_pool()
+        active = pool.get("active")
+        if active and (not proxy_raw or active.get("raw") == proxy_raw):
+            if active.get("fail_count", 0) > 0:
+                active["fail_count"] = 0
+                save_proxy_pool(pool)
+
+def add_proxies_to_pool(raw_text):
+    lines = (raw_text or "").strip().splitlines()
+    with proxy_pool_lock:
+        pool = load_proxy_pool()
+        existing_raws = set()
+        if pool.get("active"):
+            existing_raws.add(pool["active"]["raw"])
+        for b in pool.get("backups", []):
+            existing_raws.add(b["raw"])
+        for e in pool.get("exhausted", []):
+            existing_raws.add(e["raw"])
+
+        added_cnt = 0
+        skipped_cnt = 0
+        for line in lines:
+            p = parse_proxy_line(line)
+            if not p:
+                continue
+            if p["raw"] in existing_raws:
+                skipped_cnt += 1
+                continue
+            existing_raws.add(p["raw"])
+            p["added_at"] = time.time()
+            p["fail_count"] = 0
+            if not pool.get("active"):
+                pool["active"] = p
+            else:
+                pool.setdefault("backups", []).append(p)
+            added_cnt += 1
+
+        save_proxy_pool(pool)
+        return added_cnt, skipped_cnt, pool
 
 DEFAULT_CHROMIUM_ARGS = [
     '--no-sandbox',
@@ -283,6 +550,7 @@ def check_session_validity(headless=True):
         return False
     if not os.path.exists(SESSION_FILE):
         return False
+    active_cfg = get_active_proxy_config()
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -291,7 +559,7 @@ def check_session_validity(headless=True):
                 ignore_default_args=['--enable-automation']
             )
             context = browser.new_context(
-                proxy=PROXY_CONFIG,
+                proxy=active_cfg,
                 user_agent=USER_AGENT,
                 viewport={'width': 1280, 'height': 720}
             )
@@ -319,6 +587,7 @@ def do_login(headless=True):
         print("[-] Error: 'playwright' is not installed. Run: pip install -r requirements.txt && playwright install chromium")
         return False
     print("[*] Logging in to ouo.io with proxy...")
+    active_cfg = get_active_proxy_config()
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -327,7 +596,7 @@ def do_login(headless=True):
                 ignore_default_args=['--enable-automation']
             )
             context = browser.new_context(
-                proxy=PROXY_CONFIG,
+                proxy=active_cfg,
                 user_agent=USER_AGENT,
                 viewport={'width': 1280, 'height': 720}
             )
@@ -390,6 +659,8 @@ def do_login(headless=True):
                 browser.close()
                 return False
     except Exception as e:
+        err_msg = str(e)
+        handle_proxy_error(err_msg, active_cfg.get('raw'))
         print(f"[!] Login exception: {e}")
         return False
 
@@ -419,6 +690,7 @@ def check_ouo_dashboard_hourly(force=False):
         return
         
     print("[*] Scraping hourly ouo.io dashboard snapshot...")
+    active_cfg = get_active_proxy_config()
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -426,7 +698,7 @@ def check_ouo_dashboard_hourly(force=False):
                 args=DEFAULT_CHROMIUM_ARGS,
                 ignore_default_args=['--enable-automation']
             )
-            context = browser.new_context(proxy=PROXY_CONFIG, user_agent=USER_AGENT, viewport={'width': 1280, 'height': 720})
+            context = browser.new_context(proxy=active_cfg, user_agent=USER_AGENT, viewport={'width': 1280, 'height': 720})
             context.add_init_script('''
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 window.chrome = { runtime: {} };
@@ -499,6 +771,8 @@ def check_ouo_dashboard_hourly(force=False):
             record_dashboard_stats(dash_data)
             print(f"[+] Hourly Check Complete: Views={dash_data['views']}, Earnings={dash_data['earnings']}, Available={dash_data['available']}")
     except Exception as e:
+        err_msg = str(e)
+        handle_proxy_error(err_msg, active_cfg.get('raw'))
         print(f"[!] Hourly dashboard check notice: {e}")
 
 # ------------------------------------------------------------------------------
@@ -527,6 +801,7 @@ def shorten_target(target_url, cookies_path=None):
         print("[-] Error: 'playwright' is not installed. Run: pip install -r requirements.txt && playwright install chromium")
         return None
     c_path = cookies_path or SESSION_FILE
+    active_cfg = get_active_proxy_config()
     with shortener_lock:
         try:
             with sync_playwright() as p:
@@ -536,7 +811,7 @@ def shorten_target(target_url, cookies_path=None):
                     ignore_default_args=['--enable-automation']
                 )
                 context = browser.new_context(
-                    proxy=PROXY_CONFIG,
+                    proxy=active_cfg,
                     user_agent=USER_AGENT,
                     viewport={'width': 1280, 'height': 720}
                 )
@@ -888,12 +1163,20 @@ def worker_routine(worker_id):
                 continue
 
             proxy_cfg, country_label = get_rotating_visitor_proxy()
+            if not proxy_cfg or not proxy_cfg.get('server'):
+                print(f"[Worker #{worker_id}] ⚠️ No active proxy available in pool. Waiting 15s...")
+                time.sleep(15)
+                continue
+
+            raw_proxy = proxy_cfg.get('raw')
             ok, dest = visit_shortlink(short_url, worker_id=worker_id, proxy=proxy_cfg)
             record_view_result(ok, short_url, dest, country=f"{country_label} (Rotating Residential)")
 
             if ok:
+                handle_proxy_success(raw_proxy)
                 print(f"[Worker #{worker_id}] ✅ Paid View Verified ({country_label}) on {short_url}!")
             else:
+                handle_proxy_error(dest, raw_proxy)
                 print(f"[Worker #{worker_id}] ⚠️ View ended on {short_url}: {dest[:45]}...")
 
             worker_sleep = random.uniform(3.0, 10.0)
@@ -1037,6 +1320,9 @@ def run_telegram_bot():
         last_link = stats.get("last_shortlink", "None yet")
         last_act = stats.get("last_activity_str", "None yet")
         
+        active_p = get_active_proxy()
+        active_str = active_p.get("raw") if active_p else "None (Exhausted)"
+        
         return (
             "📊 <b>ROX AI — 24/7 Earning & Automation Dashboard</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1056,6 +1342,7 @@ def run_telegram_bot():
             "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🌐 <b>Dynamic Portal:</b> <a href=\"{DEFAULT_VERCEL_APP}\">ouo-portal.vercel.app</a>\n"
             "📡 <b>Visitor Network:</b> 🇺🇸 US Residential (Auto-Rotating IPs)\n"
+            f"🛡️ <b>Active Proxy:</b> <code>{active_str}</code>\n"
             f"🔗 <b>Latest Shortlink:</b> <code>{last_link}</code>\n"
             f"🕒 <b>Last Activity:</b> <code>{last_act}</code>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1067,10 +1354,63 @@ def run_telegram_bot():
         b_refresh = types.InlineKeyboardButton(text="🔄 Refresh Status", callback_data="cb_refresh_status")
         b_portal = types.InlineKeyboardButton(text="🌐 Vercel Portal", url=DEFAULT_VERCEL_APP)
         b_force_check = types.InlineKeyboardButton(text="💰 Sync Earnings Now", callback_data="cb_force_check")
-        b_health = types.InlineKeyboardButton(text="🔑 Session Health", callback_data="cb_health_check")
+        b_admin = types.InlineKeyboardButton(text="⚙️ Proxy Admin", callback_data="cb_open_admin")
         markup.row(b_refresh, b_portal)
-        markup.row(b_force_check, b_health)
+        markup.row(b_force_check, b_admin)
         return markup
+
+    def build_admin_card_text():
+        pool = load_proxy_pool()
+        active = pool.get("active")
+        backups = pool.get("backups", [])
+        exhausted = pool.get("exhausted", [])
+        
+        if active:
+            active_info = (
+                f"<code>{active.get('raw')}</code>\n"
+                f"• Server: <code>{active.get('ip')}:{active.get('port')}</code>\n"
+                f"• Username: <code>{active.get('username') or 'None'}</code>\n"
+                f"• Status: 🟢 <b>ONLINE (Active)</b>"
+            )
+        else:
+            active_info = "❌ <b>NONE (All Proxies Exhausted!)</b>"
+            
+        return (
+            "⚙️ <b>ROX AI — Proxy Manager & Auto-Failover Admin</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "📡 <b>Active Working Proxy:</b>\n"
+            f"{active_info}\n\n"
+            f"📦 <b>Queued Backup Proxies:</b> <code>{len(backups)}</code> ready\n"
+            f"⚠️ <b>Exhausted (Dead) History:</b> <code>{len(exhausted)}</code> proxies\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "📥 <b>To Add New Proxies:</b>\n"
+            "Simply send one or multiple proxies in chat:\n"
+            "<code>ip:port:username:password</code>\n"
+            "<i>(Line by line if adding multiple proxies)</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>Auto-failover: When active proxy is over (402/dead), bot auto-switches to next and alerts admin.</i>"
+        )
+
+    def get_admin_inline_markup():
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        b_add = types.InlineKeyboardButton(text="➕ Add Proxies", callback_data="cb_admin_add_prompt")
+        b_view = types.InlineKeyboardButton(text="📋 View Pool", callback_data="cb_admin_view_pool")
+        b_next = types.InlineKeyboardButton(text="⏭️ Switch Next", callback_data="cb_admin_next_proxy")
+        b_clear = types.InlineKeyboardButton(text="🗑️ Clear Dead", callback_data="cb_admin_clear_dead")
+        b_refresh = types.InlineKeyboardButton(text="🔄 Refresh", callback_data="cb_admin_refresh")
+        b_dash = types.InlineKeyboardButton(text="📊 Main Dashboard", callback_data="cb_admin_go_dash")
+        markup.row(b_add, b_view)
+        markup.row(b_next, b_clear)
+        markup.row(b_refresh, b_dash)
+        return markup
+
+    def send_or_update_admin_card(chat_id, edit_msg_id=None):
+        text = build_admin_card_text()
+        markup = get_admin_inline_markup()
+        if edit_msg_id and safe_edit(chat_id, edit_msg_id, text, reply_markup=markup):
+            return
+        sent = bot.send_message(chat_id, text, reply_markup=markup, disable_web_page_preview=True)
+        return sent.message_id
 
     def send_or_update_status_card(chat_id, edit_msg_id=None):
         text = build_status_card_text()
@@ -1109,6 +1449,15 @@ def run_telegram_bot():
             markup.add(types.InlineKeyboardButton(text="🔄 Try Again", callback_data="cb_reauth"))
             bot.send_message(chat_id, "❌ <b>Access Denied: Incorrect Password!</b>", reply_markup=markup)
 
+    @bot.message_handler(commands=['admin'])
+    def cmd_admin(message):
+        chat_id = message.chat.id
+        safe_delete(chat_id, message.message_id)
+        if not is_user_authenticated(chat_id):
+            prompt_for_password(chat_id)
+            return
+        send_or_update_admin_card(chat_id)
+
     @bot.message_handler(commands=['start', 'status', 'help'])
     def cmd_start(message):
         chat_id = message.chat.id
@@ -1121,10 +1470,33 @@ def run_telegram_bot():
     @bot.message_handler(func=lambda m: True)
     def handle_all_messages(message):
         chat_id = message.chat.id
+        txt = (message.text or "").strip()
         safe_delete(chat_id, message.message_id)
         if not is_user_authenticated(chat_id):
             prompt_for_password(chat_id)
             return
+
+        # Check if message contains proxy lines (e.g. ip:port:user:pass)
+        first_line = txt.splitlines()[0] if txt else ""
+        if parse_proxy_line(first_line):
+            added_cnt, skipped_cnt, pool = add_proxies_to_pool(txt)
+            active = pool.get("active")
+            active_str = active.get("raw") if active else "None"
+            backups_cnt = len(pool.get("backups", []))
+            
+            resp_text = (
+                "✅ <b>Proxies Processed & Saved to Pool!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"➕ <b>Added to Pool:</b> <code>{added_cnt}</code> new proxy(s)\n"
+                f"⏭️ <b>Skipped (Duplicates):</b> <code>{skipped_cnt}</code>\n"
+                f"🟢 <b>Active Working Proxy:</b> <code>{active_str}</code>\n"
+                f"📦 <b>Queued Backups:</b> <code>{backups_cnt}</code> proxies ready\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Auto-failover active. If active proxy exhausts (402/dead), bot will switch to next backup and alert you.</i>"
+            )
+            bot.send_message(chat_id, resp_text, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+            return
+
         send_or_update_status_card(chat_id)
 
     @bot.callback_query_handler(func=lambda call: True)
@@ -1159,6 +1531,103 @@ def run_telegram_bot():
         elif data == "cb_health_check":
             bot.answer_callback_query(call.id, "Session health checked!")
             send_or_update_status_card(chat_id, edit_msg_id=call.message.message_id)
+        elif data == "cb_open_admin":
+            bot.answer_callback_query(call.id)
+            send_or_update_admin_card(chat_id, edit_msg_id=call.message.message_id)
+        elif data == "cb_admin_go_dash":
+            bot.answer_callback_query(call.id)
+            send_or_update_status_card(chat_id, edit_msg_id=call.message.message_id)
+        elif data == "cb_admin_refresh":
+            bot.answer_callback_query(call.id, "Admin refreshed! ⚡")
+            send_or_update_admin_card(chat_id, edit_msg_id=call.message.message_id)
+        elif data == "cb_admin_add_prompt":
+            bot.answer_callback_query(call.id)
+            prompt_markup = types.InlineKeyboardMarkup()
+            prompt_markup.add(types.InlineKeyboardButton(text="🔙 Back to Admin", callback_data="cb_open_admin"))
+            msg = bot.send_message(
+                chat_id,
+                "📥 <b>Send Proxies:</b>\n\n"
+                "Please paste your proxies in chat in format:\n"
+                "<code>ip:port:username:password</code>\n\n"
+                "<i>(If sending multiple, put one per line)</i>",
+                reply_markup=prompt_markup
+            )
+            def process_proxy_input(m):
+                safe_delete(chat_id, m.message_id)
+                safe_delete(chat_id, msg.message_id)
+                input_text = (m.text or "").strip()
+                first_line = input_text.splitlines()[0] if input_text else ""
+                if not parse_proxy_line(first_line):
+                    bot.send_message(chat_id, "❌ <b>Invalid proxy format!</b>\nUse: <code>ip:port:username:password</code>", reply_markup=get_admin_inline_markup())
+                    return
+                added_cnt, skipped_cnt, pool = add_proxies_to_pool(input_text)
+                active = pool.get("active")
+                active_str = active.get("raw") if active else "None"
+                backups_cnt = len(pool.get("backups", []))
+                resp = (
+                    "✅ <b>Proxies Successfully Added to Pool!</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"➕ <b>Added:</b> <code>{added_cnt}</code> proxy(s)\n"
+                    f"⏭️ <b>Skipped (Duplicates):</b> <code>{skipped_cnt}</code>\n"
+                    f"🟢 <b>Active:</b> <code>{active_str}</code>\n"
+                    f"📦 <b>Backups Queued:</b> <code>{backups_cnt}</code>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                bot.send_message(chat_id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+            bot.register_next_step_handler(msg, process_proxy_input)
+        elif data == "cb_admin_view_pool":
+            bot.answer_callback_query(call.id)
+            pool = load_proxy_pool()
+            active = pool.get("active")
+            backups = pool.get("backups", [])
+            exhausted = pool.get("exhausted", [])
+            
+            lines = ["📋 <b>ROX AI — Proxy Pool Overview</b>", "━━━━━━━━━━━━━━━━━━━━━━━━━━"]
+            if active:
+                lines.append(f"🟢 <b>ACTIVE:</b> <code>{active.get('raw')}</code>\n")
+            else:
+                lines.append("❌ <b>ACTIVE: None (Exhausted!)</b>\n")
+                
+            lines.append(f"📦 <b>BACKUPS QUEUE ({len(backups)}):</b>")
+            if backups:
+                for idx, b in enumerate(backups[:10], 1):
+                    lines.append(f"  {idx}. <code>{b.get('raw')}</code>")
+                if len(backups) > 10:
+                    lines.append(f"  <i>...and {len(backups)-10} more</i>")
+            else:
+                lines.append("  <i>No backups queued.</i>")
+                
+            lines.append(f"\n⚠️ <b>DEAD / EXHAUSTED ({len(exhausted)}):</b>")
+            if exhausted:
+                for idx, ex in enumerate(exhausted[-5:], 1):
+                    lines.append(f"  • <code>{ex.get('raw')}</code>\n    ↳ <i>{ex.get('reason', 'Over')}</i>")
+                if len(exhausted) > 5:
+                    lines.append(f"  <i>...and {len(exhausted)-5} older</i>")
+            else:
+                lines.append("  <i>None</i>")
+            lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.row(types.InlineKeyboardButton(text="🔙 Back to Admin", callback_data="cb_open_admin"))
+            safe_edit(chat_id, call.message.message_id, "\n".join(lines), reply_markup=markup)
+        elif data == "cb_admin_next_proxy":
+            pool = load_proxy_pool()
+            active = pool.get("active")
+            cur_raw = active.get("raw") if active else None
+            nxt = mark_current_proxy_exhausted(cur_raw, reason="Manual skip by admin")
+            if nxt:
+                bot.answer_callback_query(call.id, f"Switched to: {nxt.get('ip')}")
+            else:
+                bot.answer_callback_query(call.id, "No more backup proxies in pool!", show_alert=True)
+            send_or_update_admin_card(chat_id, edit_msg_id=call.message.message_id)
+        elif data == "cb_admin_clear_dead":
+            with proxy_pool_lock:
+                pool = load_proxy_pool()
+                cleared_count = len(pool.get("exhausted", []))
+                pool["exhausted"] = []
+                save_proxy_pool(pool)
+            bot.answer_callback_query(call.id, f"Cleared {cleared_count} dead proxies!")
+            send_or_update_admin_card(chat_id, edit_msg_id=call.message.message_id)
 
     def auto_report_loop():
         print(f"[*] Hourly Auto-Report Daemon started for Admin: {ADMIN_CHAT_ID} (Every 1 Hour)")
