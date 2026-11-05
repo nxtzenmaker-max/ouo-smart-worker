@@ -35,6 +35,7 @@ import argparse
 import threading
 import subprocess
 import urllib.parse
+import uuid
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -241,6 +242,23 @@ def get_rotating_visitor_proxy():
     cfg = get_active_proxy_config()
     if not cfg:
         return None, "No Active Proxy"
+
+    # Per-Visit Sticky Session for Oxylabs:
+    # Keeps ONE consistent residential IP across the entire click/solve flow of a link,
+    # preventing ouo.io from rejecting the view due to mid-visit IP mutation!
+    # Fresh IP rotates on every new link visit.
+    username = cfg.get('username', '')
+    if 'customer-resi' in username:
+        base_user = username.split('-sessid-')[0]
+        sess_id = uuid.uuid4().hex[:8]
+        sticky_username = f"{base_user}-sessid-{sess_id}"
+        cfg = {
+            'server': cfg['server'],
+            'username': sticky_username,
+            'password': cfg.get('password', ''),
+            'raw': f"{cfg.get('server')}:{sticky_username}"
+        }
+
     ip_label = cfg.get('server', '').replace('http://', '').replace('https://', '').split(':')[0]
     label = f"🇺🇸 {ip_label}"
     return cfg, label
@@ -961,25 +979,22 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
         def ultra_bandwidth_filter(route):
             try:
                 req = route.request
-                # If already leaving ouo, abort everything so destination page doesn't download 15MB!
-                if 'ouo.io' not in req.url and 'ouo.press' not in req.url:
-                    if req.resource_type in ["image", "media", "font", "stylesheet", "other"]:
+                u = req.url
+                # If destination page hit: abort all heavy assets immediately!
+                if 'ouo.io' not in u and 'ouo.press' not in u:
+                    if req.resource_type in ["image", "media", "font", "stylesheet", "other", "xhr", "fetch"]:
                         return route.abort()
                     return route.continue_()
 
-                # On ouo.io: Block images, video, audio, fonts
-                if req.resource_type in ["image", "media", "font"]:
+                # On ouo.io: strictly block all images, stylesheets, media, fonts, websockets, ping
+                if req.resource_type in ["image", "media", "font", "stylesheet", "websocket", "ping"]:
                     return route.abort()
 
-                url_l = req.url.lower()
-                heavy_ad_hosts = [
-                    "doubleclick", "googlesyndication", "popads", "adcash",
-                    "exoclick", "propellerads", "adsterra", "trafficjunky",
-                    "adnxs", "creativecdn", "adservice", "analytics", ".mp4", ".webm",
-                    "video", "vast", "banner", "cpmstar", "taboola", "outbrain", "yandex"
-                ]
-                if any(h in url_l for h in heavy_ad_hosts):
+                # Block all third-party ad networks, popunder scripts, analytics completely
+                # Only allow requests to ouo.io or ouo.press domain itself!
+                if not (u.startswith("https://ouo.io") or u.startswith("https://ouo.press") or u.startswith("http://ouo.io") or u.startswith("http://ouo.press")):
                     return route.abort()
+
                 return route.continue_()
             except Exception:
                 return route.abort()
@@ -1288,7 +1303,7 @@ def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
         t = threading.Thread(target=worker_routine, args=(w_id,), daemon=True)
         t.start()
         threads.append(t)
-        time.sleep(0.5)
+        time.sleep(0.7)
         
     print(f"[+] All {num_workers} Workers successfully dispatched! Running 24/7.")
     
