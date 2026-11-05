@@ -120,6 +120,20 @@ DEFAULT_VERCEL_APP = os.environ.get('VERCEL_APP_URL', "https://ouo-portal.vercel
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', "8321630022")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
+DEFAULT_CHROMIUM_ARGS = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--single-process',
+    '--no-zygote',
+    '--disable-software-rasterizer',
+    '--disable-extensions',
+    '--js-flags=--max-old-space-size=128',
+    '--window-size=1280,720'
+]
+
 HOURLY_CHECK_INTERVAL = 300  # Check every 5 minutes
 NUM_WORKERS = int(os.environ.get("OUO_WORKERS", 40))
 SESSION_LIFETIME = 86400      # 24 Hours
@@ -273,7 +287,8 @@ def check_session_validity(headless=True):
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=headless,
-                args=['--no-sandbox', '--disable-blink-features=AutomationControlled']
+                args=DEFAULT_CHROMIUM_ARGS,
+                ignore_default_args=['--enable-automation']
             )
             context = browser.new_context(
                 proxy=PROXY_CONFIG,
@@ -308,7 +323,7 @@ def do_login(headless=True):
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=headless,
-                args=['--no-sandbox', '--disable-blink-features=AutomationControlled', '--disable-infobars', '--disable-dev-shm-usage'],
+                args=DEFAULT_CHROMIUM_ARGS,
                 ignore_default_args=['--enable-automation']
             )
             context = browser.new_context(
@@ -408,7 +423,7 @@ def check_ouo_dashboard_hourly(force=False):
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+                args=DEFAULT_CHROMIUM_ARGS,
                 ignore_default_args=['--enable-automation']
             )
             context = browser.new_context(proxy=PROXY_CONFIG, user_agent=USER_AGENT, viewport={'width': 1280, 'height': 720})
@@ -511,7 +526,7 @@ def shorten_target(target_url, cookies_path=None):
             with sync_playwright() as p:
                 browser = p.chromium.launch(
                     headless=True,
-                    args=['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+                    args=DEFAULT_CHROMIUM_ARGS,
                     ignore_default_args=['--enable-automation']
                 )
                 context = browser.new_context(
@@ -585,18 +600,7 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--no-zygote',
-                    '--disable-software-rasterizer',
-                    '--disable-extensions',
-                    '--js-flags=--max-old-space-size=128',
-                    '--window-size=1280,720'
-                ],
+                args=DEFAULT_CHROMIUM_ARGS,
                 ignore_default_args=['--enable-automation']
             )
             context = browser.new_context(
@@ -871,6 +875,7 @@ def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
     save_stats(stats)
     
     def session_and_hourly_worker():
+        time.sleep(15)
         try:
             if not check_session_validity():
                 do_login()
