@@ -86,8 +86,8 @@ AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Webshare)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://p.webshare.io:80')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'yjzdynuw-rotate')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'z8aeyhoyjcz2')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'afccanza-rotate')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', '00lox8cy2pys')
 
 def get_rotating_visitor_proxy():
     cfg = {
