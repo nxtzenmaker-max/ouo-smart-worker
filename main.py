@@ -301,7 +301,7 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
             print(f"[ProxyManager] 🔄 Switched active proxy from {dead_desc} to {new_active.get('raw')}")
             
             alert_msg = (
-                "⚠️ <b>ROX AI — Proxy Over Alert!</b>\n"
+                "⚠️ <b>RJN's AI — Proxy Over Alert!</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"❌ <b>proxy over, proxy - <code>{dead_desc}</code></b>\n"
                 f"ℹ️ <b>Reason:</b> {reason}\n"
@@ -319,7 +319,7 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
             save_proxy_pool(pool)
             print(f"[ProxyManager] 🚨 All proxies exhausted! No backup left in pool.")
             alert_msg = (
-                "🚨 <b>ROX AI — ALL PROXIES OVER!</b>\n"
+                "🚨 <b>RJN's AI — ALL PROXIES OVER!</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"❌ <b>proxy over, proxy - <code>{dead_desc}</code></b>\n"
                 f"ℹ️ <b>Reason:</b> {reason}\n"
@@ -1361,7 +1361,7 @@ def run_telegram_bot():
         active_str = active_p.get("raw") if active_p else "None (Exhausted)"
         
         return (
-            "📊 <b>ROX AI — 24/7 Earning & Automation Dashboard</b>\n"
+            "📊 <b>RJN's AI — 24/7 Earning & Automation Dashboard</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ <b>24/7 Engine Status:</b> <b>{daemon_badge}</b>\n"
             f"🔗 <b>Total Links Generated:</b> <code>{links_created}</code> links\n"
@@ -1413,7 +1413,7 @@ def run_telegram_bot():
             active_info = "❌ <b>NONE (All Proxies Exhausted!)</b>"
             
         return (
-            "⚙️ <b>ROX AI — Proxy Manager & Auto-Failover Admin</b>\n"
+            "⚙️ <b>RJN's AI — Proxy Manager & Auto-Failover Admin</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "📡 <b>Active Working Proxy:</b>\n"
             f"{active_info}\n\n"
@@ -1619,7 +1619,7 @@ def run_telegram_bot():
             backups = pool.get("backups", [])
             exhausted = pool.get("exhausted", [])
             
-            lines = ["📋 <b>ROX AI — Proxy Pool Overview</b>", "━━━━━━━━━━━━━━━━━━━━━━━━━━"]
+            lines = ["📋 <b>RJN's AI — Proxy Pool Overview</b>", "━━━━━━━━━━━━━━━━━━━━━━━━━━"]
             if active:
                 lines.append(f"🟢 <b>ACTIVE:</b> <code>{active.get('raw')}</code>\n")
             else:
@@ -1673,8 +1673,8 @@ def run_telegram_bot():
             try:
                 check_ouo_dashboard_hourly(force=True)
                 text = (
-                    "🔔 <b>ROX AI — Hourly Auto Earning Report</b>\n" +
-                    build_status_card_text().replace("📊 <b>ROX AI — 24/7 Earning & Automation Dashboard</b>\n", "")
+                    "🔔 <b>RJN's AI — Hourly Auto Earning Report</b>\n" +
+                    build_status_card_text().replace("📊 <b>RJN's AI — 24/7 Earning & Automation Dashboard</b>\n", "")
                 )
                 markup = get_status_inline_markup()
                 for tid in {str(ADMIN_CHAT_ID), "8321630022"}:
