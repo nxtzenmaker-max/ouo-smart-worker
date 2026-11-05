@@ -588,17 +588,23 @@ def visit_shortlink(short_url, worker_id=1, proxy=None):
                 headless=True,
                 args=[
                     '--no-sandbox',
+                    '--disable-setuid-sandbox',
                     '--disable-blink-features=AutomationControlled',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--window-size=1920,1080'
+                    '--single-process',
+                    '--no-zygote',
+                    '--disable-software-rasterizer',
+                    '--disable-extensions',
+                    '--js-flags=--max-old-space-size=128',
+                    '--window-size=1280,720'
                 ],
                 ignore_default_args=['--enable-automation']
             )
             context = browser.new_context(
                 proxy=use_proxy,
                 user_agent=USER_AGENT,
-                viewport={'width': 1920, 'height': 1080}
+                viewport={'width': 1280, 'height': 720}
             )
             context.add_init_script('''
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });

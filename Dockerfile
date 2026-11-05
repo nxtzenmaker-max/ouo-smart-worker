@@ -16,9 +16,9 @@ RUN playwright install --with-deps chromium
 # Copy app
 COPY . .
 
-# Railway 2 vCPU optimization
+# Railway free plan memory-safe workers
 ENV PYTHONUNBUFFERED=1
-ENV OUO_WORKERS=25
+ENV OUO_WORKERS=3
 
 # Railway injects PORT automatically
 EXPOSE 8080
