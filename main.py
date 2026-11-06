@@ -89,8 +89,8 @@ RAW_PROXIES_FILE = resolve_path("raw_proxies.json", "/home/ipx/raw_proxies.json"
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://pr.oxylabs.io:7777')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'customer-resi_da5f213e-cc-us')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'NDKrkO+WMH6f')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'customer-resi_3c566610-cc-us')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'ERi_Y2ci1wLr')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -191,9 +191,22 @@ def load_proxy_pool():
         except Exception as e:
             print(f"[!] Error loading proxy pool: {e}")
             
+    default_ip = VISITOR_PROXY_SERVER.replace("http://", "").replace("https://", "").split(":")[0]
+    default_port = VISITOR_PROXY_SERVER.split(":")[-1] if ":" in VISITOR_PROXY_SERVER else "80"
+    fresh_default = {
+        "server": VISITOR_PROXY_SERVER,
+        "ip": default_ip,
+        "port": default_port,
+        "username": VISITOR_PROXY_USER,
+        "password": VISITOR_PROXY_PASS,
+        "raw": f"{default_ip}:{default_port}:{VISITOR_PROXY_USER}:{VISITOR_PROXY_PASS}",
+        "added_at": time.time(),
+        "fail_count": 0
+    }
+
     if not data:
         data = {
-            "active": None,
+            "active": fresh_default,
             "backups": [],
             "exhausted": []
         }
@@ -247,20 +260,10 @@ def load_proxy_pool():
                 existing_raws.add(kb)
                 updated = True
 
-    # If active proxy is Oxylabs (quota exhausted), move it to exhausted
+    # If current active proxy is None or old exhausted Oxylabs, set to fresh_default
     cur_act = data.get("active")
-    if cur_act:
-        act_raw = cur_act.get("raw", "")
-        if "customer-resi" in act_raw or "pr.oxylabs.io" in act_raw:
-            cur_act["exhausted_at"] = time.time()
-            cur_act["reason"] = "Oxylabs Quota Exhausted (407)"
-            data.setdefault("exhausted", []).append(cur_act)
-            data["active"] = None
-            updated = True
-
-    # If no active proxy, grab the first from backups
-    if not data.get("active") and data.get("backups"):
-        data["active"] = data["backups"].pop(0)
+    if not cur_act or "da5f213e" in cur_act.get("raw", "") or "3dfee8b6" in cur_act.get("raw", ""):
+        data["active"] = fresh_default
         updated = True
 
     if updated or not os.path.exists(PROXIES_FILE):
@@ -375,6 +378,16 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
             
         if dead_raw and current.get("raw") != dead_raw:
             return pool.get("active")
+
+        # Oxylabs rotating residential gateway protection:
+        # Oxylabs rotates to a fresh residential IP on each request.
+        # Only true 407 (traffic limit), 402, or 401 means quota exhaustion!
+        if "pr.oxylabs.io" in current.get("server", "") or "customer-resi" in current.get("username", ""):
+            if "407" not in reason and "auth" not in reason.lower() and "401" not in reason and "402" not in reason:
+                print(f"[ProxyManager] 🔄 Oxylabs residential gateway active ({reason}). Auto-rotating fresh residential IP for next cycle.")
+                current["fail_count"] = 0
+                save_proxy_pool(pool)
+                return current
             
         current["exhausted_at"] = time.time()
         current["reason"] = reason
