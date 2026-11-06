@@ -506,6 +506,20 @@ def handle_proxy_error(err_str, proxy_raw):
     if "chrome-error" in err_lower or "net::err_" in err_lower:
         print(f"[ProxyManager] ❌ Active proxy connection error ({err_str[:40]}). Rotating instantly!")
         mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Error ({err_str[:30]})")
+        return
+
+    # For backup public proxies (non-Oxylabs): failover after 2 consecutive failed cycles
+    with proxy_pool_lock:
+        pool = load_proxy_pool()
+        active = pool.get("active")
+        if active and "pr.oxylabs.io" not in active.get("server", "") and "customer-resi" not in active.get("username", ""):
+            active["fail_count"] = active.get("fail_count", 0) + 1
+            if active["fail_count"] >= 2:
+                print(f"[ProxyManager] ⚠️ Backup proxy {active.get('raw')} failed 2 times. Rotating to next backup proxy!")
+                mark_current_proxy_exhausted(proxy_raw, reason="Backup Proxy Unresponsive (2 fails)")
+                return
+            else:
+                save_proxy_pool(pool)
 
 def handle_proxy_success(proxy_raw):
     with proxy_pool_lock:
