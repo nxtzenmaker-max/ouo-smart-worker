@@ -216,8 +216,11 @@ def load_proxy_pool():
             "exhausted": []
         }
 
-    # Queue backup proxies from env if explicitly provided
-    known_backups = []
+    # Queue backup proxies from default pool and env
+    known_backups = [
+        "p.webshare.io:80:zdmmvlzl-US-rotate:p75yekxzcfe2",
+        "p.webshare.io:80:gfcjqdlk-US-rotate:m2gx296o36tx"
+    ]
     env_list = os.environ.get("OUO_PROXY_LIST", "")
     if env_list:
         for item in env_list.replace(";", "\n").replace("|", "\n").splitlines():
