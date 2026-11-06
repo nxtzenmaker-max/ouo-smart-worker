@@ -482,7 +482,7 @@ def handle_proxy_error(err_str, proxy_raw):
                 return
 
     # Fallback for generic connection drops
-    if "chrome-error" in err_lower or "net::err_" in err_lower or "error" in err_lower:
+    if "chrome-error" in err_lower or "net::err_" in err_lower:
         print(f"[ProxyManager] ❌ Active proxy connection error ({err_str[:40]}). Rotating instantly!")
         mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Error ({err_str[:30]})")
 
@@ -1066,33 +1066,30 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
         page.on("popup", handle_ad_popup)
         context.on("page", lambda p: handle_ad_popup(p) if (p and p != page) else None)
 
-        # Bandwidth Saver 2: Ultra Resource & Data Filter (Saves 95% proxy bandwidth)
+        # Bandwidth Saver: Block images, media, fonts, and heavy ad video networks
         def ultra_bandwidth_filter(route):
             try:
                 req = route.request
-                u = req.url
-                # Allow Cloudflare challenges and turnstile
-                if 'cloudflare' in u or 'challenges' in u:
-                    return route.continue_()
-
-                # If destination page hit: abort all heavy assets immediately!
-                if 'ouo.io' not in u and 'ouo.press' not in u:
-                    if req.resource_type in ["image", "media", "font", "stylesheet", "other", "xhr", "fetch"]:
+                u = req.url.lower()
+                if 'ouo.io' in u or 'ouo.press' in u or 'cloudflare' in u or 'challenges' in u:
+                    if req.resource_type in ["image", "media", "font"]:
                         return route.abort()
                     return route.continue_()
 
-                # On ouo.io: strictly block all images, stylesheets, media, fonts, websockets, ping
-                if req.resource_type in ["image", "media", "font", "stylesheet", "websocket", "ping"]:
+                if req.resource_type in ["image", "media", "font"]:
                     return route.abort()
 
-                # Block all third-party ad networks, popunder scripts, analytics completely
-                # Only allow requests to ouo.io or ouo.press domain itself!
-                if not (u.startswith("https://ouo.io") or u.startswith("https://ouo.press") or u.startswith("http://ouo.io") or u.startswith("http://ouo.press")):
+                heavy_ad_hosts = [
+                    "doubleclick", "googlesyndication", "popads", "adcash",
+                    "exoclick", "propellerads", "adsterra", "trafficjunky",
+                    "adnxs", "creativecdn", "adservice", "analytics", ".mp4", ".webm",
+                    "video", "vast", "banner", "cpmstar"
+                ]
+                if any(h in u for h in heavy_ad_hosts):
                     return route.abort()
-
                 return route.continue_()
             except Exception:
-                return route.abort()
+                pass
 
         try:
             page.route("**/*", ultra_bandwidth_filter)
@@ -1100,22 +1097,25 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
             pass
 
         try:
-            page.goto(short_url, wait_until='domcontentloaded', timeout=22000)
-        except Exception as e_nav:
+            page.goto(short_url, wait_until='domcontentloaded', timeout=18000)
+        except Exception:
             try:
-                context.close()
-            except Exception:
-                pass
-            if temp_browser:
+                page.goto(short_url, wait_until='commit', timeout=18000)
+            except Exception as e_nav:
                 try:
-                    temp_browser.close()
-                    temp_pw.stop()
+                    context.close()
                 except Exception:
                     pass
-            return False, f"Navigation Error: {str(e_nav)}"
+                if temp_browser:
+                    try:
+                        temp_browser.close()
+                        temp_pw.stop()
+                    except Exception:
+                        pass
+                return False, f"Navigation Error: {str(e_nav)}"
 
-        # Fast Cloudflare check (2s max)
-        for _ in range(2):
+        # Fast Cloudflare check
+        for _ in range(12):
             try:
                 t = page.title()
                 if 'Just a moment' not in t and t != '':
