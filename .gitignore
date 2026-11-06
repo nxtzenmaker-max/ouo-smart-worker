@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.json
 !ouo_session.json
+!raw_proxies.json
 !requirements.txt
 .env
 .venv/

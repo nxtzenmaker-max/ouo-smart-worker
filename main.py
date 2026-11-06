@@ -85,6 +85,7 @@ SESSION_FILE = resolve_path("ouo_session.json", "/home/ipx/ouo_session.json")
 STATS_FILE = resolve_path("campaign_stats.json", "/home/ipx/campaign_stats.json")
 AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
+RAW_PROXIES_FILE = resolve_path("raw_proxies.json", "/home/ipx/raw_proxies.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://pr.oxylabs.io:7777')
@@ -130,9 +131,14 @@ def parse_proxy_line(line):
         except Exception:
             pass
 
-    for prefix in ['http://', 'https://', 'socks5://', 'socks4://']:
-        if line.startswith(prefix):
+    orig_line = line
+    proto = "http"
+    for prefix in ['socks5://', 'socks4://', 'https://', 'http://']:
+        if line.lower().startswith(prefix):
+            proto = prefix[:-3].lower()
             line = line[len(prefix):]
+            break
+
     if '@' in line:
         try:
             auth_part, host_part = line.rsplit('@', 1)
@@ -142,12 +148,12 @@ def parse_proxy_line(line):
                 user, pwd = u_p
                 ip, port = h_p
                 return {
-                    'server': f'http://{ip}:{port}',
+                    'server': f'{proto}://{ip}:{port}',
                     'ip': ip,
                     'port': port,
                     'username': user,
                     'password': pwd,
-                    'raw': f'{ip}:{port}:{user}:{pwd}'
+                    'raw': orig_line
                 }
         except Exception:
             return None
@@ -155,22 +161,22 @@ def parse_proxy_line(line):
     if len(parts) == 4 and parts[1].isdigit():
         ip, port, user, pwd = parts
         return {
-            'server': f'http://{ip}:{port}',
+            'server': f'{proto}://{ip}:{port}',
             'ip': ip,
             'port': port,
             'username': user,
             'password': pwd,
-            'raw': f'{ip}:{port}:{user}:{pwd}'
+            'raw': orig_line
         }
     elif len(parts) == 2 and parts[1].isdigit():
         ip, port = parts
         return {
-            'server': f'http://{ip}:{port}',
+            'server': f'{proto}://{ip}:{port}',
             'ip': ip,
             'port': port,
             'username': '',
             'password': '',
-            'raw': f'{ip}:{port}'
+            'raw': orig_line
         }
     return None
 
@@ -186,32 +192,42 @@ def load_proxy_pool():
             print(f"[!] Error loading proxy pool: {e}")
             
     if not data:
-        default_ip = VISITOR_PROXY_SERVER.replace("http://", "").replace("https://", "").split(":")[0]
-        default_port = VISITOR_PROXY_SERVER.split(":")[-1] if ":" in VISITOR_PROXY_SERVER else "80"
-        default_raw = f"{default_ip}:{default_port}:{VISITOR_PROXY_USER}:{VISITOR_PROXY_PASS}"
         data = {
-            "active": {
-                "server": VISITOR_PROXY_SERVER,
-                "ip": default_ip,
-                "port": default_port,
-                "username": VISITOR_PROXY_USER,
-                "password": VISITOR_PROXY_PASS,
-                "raw": default_raw,
-                "added_at": time.time(),
-                "fail_count": 0
-            },
+            "active": None,
             "backups": [],
             "exhausted": []
         }
 
-    # Automatically queue fresh backup proxies if not already present
+    # Automatically queue fresh backup proxies from raw_proxies.json or env
     known_backups = []
+    raw_files = [
+        RAW_PROXIES_FILE,
+        os.path.join(BASE_DIR, "raw_proxies.json"),
+        "/home/ipx/ouo-standalone/raw_proxies.json",
+        "/home/ipx/raw_proxies.json",
+        "/home/ajit/raw_proxies.json"
+    ]
+    for rf in raw_files:
+        if rf and os.path.exists(rf):
+            try:
+                with open(rf, 'r') as f:
+                    content = json.load(f)
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, str) and item.strip():
+                                known_backups.append(item.strip())
+                if known_backups:
+                    break
+            except Exception as e:
+                print(f"[!] Error loading {rf}: {e}")
+
     env_list = os.environ.get("OUO_PROXY_LIST", "")
     if env_list:
         for item in env_list.replace(";", "\n").replace("|", "\n").splitlines():
             item = item.strip()
             if item:
                 known_backups.append(item)
+
     existing_raws = set()
     if data.get("active"):
         existing_raws.add(data["active"].get("raw"))
@@ -230,6 +246,22 @@ def load_proxy_pool():
                 data.setdefault("backups", []).append(p)
                 existing_raws.add(kb)
                 updated = True
+
+    # If active proxy is Oxylabs (quota exhausted), move it to exhausted
+    cur_act = data.get("active")
+    if cur_act:
+        act_raw = cur_act.get("raw", "")
+        if "customer-resi" in act_raw or "pr.oxylabs.io" in act_raw:
+            cur_act["exhausted_at"] = time.time()
+            cur_act["reason"] = "Oxylabs Quota Exhausted (407)"
+            data.setdefault("exhausted", []).append(cur_act)
+            data["active"] = None
+            updated = True
+
+    # If no active proxy, grab the first from backups
+    if not data.get("active") and data.get("backups"):
+        data["active"] = data["backups"].pop(0)
+        updated = True
 
     if updated or not os.path.exists(PROXIES_FILE):
         save_proxy_pool(data)
@@ -272,9 +304,6 @@ def get_rotating_visitor_proxy():
         return None, "No Active Proxy"
 
     # Per-Visit Sticky Session for Oxylabs:
-    # Keeps ONE consistent residential IP across the entire click/solve flow of a link,
-    # preventing ouo.io from rejecting the view due to mid-visit IP mutation!
-    # Fresh IP rotates on every new link visit.
     username = cfg.get('username', '')
     if 'customer-resi' in username:
         base_user = username.split('-sessid-')[0]
@@ -287,13 +316,18 @@ def get_rotating_visitor_proxy():
             'raw': f"{cfg.get('server')}:{sticky_username}"
         }
 
-    ip_label = cfg.get('server', '').replace('http://', '').replace('https://', '').split(':')[0]
-    label = f"🇺🇸 {ip_label}"
+    srv = cfg.get('server', '')
+    proto = srv.split('://')[0].upper() if '://' in srv else 'HTTP'
+    host_port = srv.split('://')[-1] if '://' in srv else srv
+    ip_label = host_port.split(':')[0]
+    label = f"{proto} {ip_label}"
     return cfg, label
 
 # Fallback alias for components expecting PROXY_CONFIG
 VISITOR_PROXY_CONFIG = None
 PROXY_CONFIG = None
+
+last_failover_alert_time = 0
 
 def send_telegram_admin_alert(text):
     if not BOT_TOKEN or not REQUESTS_AVAILABLE:
@@ -326,21 +360,22 @@ def send_telegram_admin_alert(text):
             print(f"[!] Alert delivery error to {cid}: {e}")
 
 def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"):
+    global last_failover_alert_time
     with proxy_pool_lock:
         pool = load_proxy_pool()
         current = pool.get("active")
         if not current:
+            backups = pool.get("backups", [])
+            if backups:
+                new_active = backups.pop(0)
+                pool["active"] = new_active
+                save_proxy_pool(pool)
+                return new_active
             return None
+            
         if dead_raw and current.get("raw") != dead_raw:
             return pool.get("active")
             
-        if "pr.oxylabs.io" in current.get("server", "") or "customer-resi" in current.get("username", ""):
-            if "407" not in reason and "auth" not in reason.lower() and "401" not in reason:
-                print(f"[ProxyManager] 🔄 Oxylabs rotating residential gateway active ({reason}). Resetting for next connection cycle.")
-                current["fail_count"] = 0
-                save_proxy_pool(pool)
-                return current
-
         current["exhausted_at"] = time.time()
         current["reason"] = reason
         pool.setdefault("exhausted", []).append(current)
@@ -351,21 +386,22 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
             new_active = backups.pop(0)
             pool["active"] = new_active
             save_proxy_pool(pool)
-            print(f"[ProxyManager] 🔄 Switched active proxy from {dead_desc} to {new_active.get('raw')}")
+            print(f"[ProxyManager] 🔄 Switched active proxy from {dead_desc} to {new_active.get('raw')} (Remaining: {len(backups)})")
             
-            alert_msg = (
-                "⚠️ <b>RJN's AI — Proxy Over Alert!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"❌ <b>proxy over, proxy - <code>{dead_desc}</code></b>\n"
-                f"ℹ️ <b>Reason:</b> {reason}\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "🔄 <b>Auto-failover activated:</b>\n"
-                f"🟢 <b>New Active Proxy:</b> <code>{new_active.get('raw')}</code>\n"
-                f"📦 <b>Remaining Backups:</b> <code>{len(backups)}</code> ready in pool\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Tip: Send new proxies via /admin if you want to add more backups!</i>"
-            )
-            threading.Thread(target=send_telegram_admin_alert, args=(alert_msg,), daemon=True).start()
+            now = time.time()
+            if (now - last_failover_alert_time) > 120:
+                last_failover_alert_time = now
+                alert_msg = (
+                    "⚠️ <b>RJN's AI — Proxy Auto-Failover!</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"❌ <b>Proxy Replaced:</b> <code>{dead_desc}</code>\n"
+                    f"ℹ️ <b>Reason:</b> {reason}\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🟢 <b>New Active:</b> <code>{new_active.get('raw')}</code>\n"
+                    f"📦 <b>Pool Remaining:</b> <code>{len(backups)}</code> proxies ready\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                threading.Thread(target=send_telegram_admin_alert, args=(alert_msg,), daemon=True).start()
             return new_active
         else:
             pool["active"] = None
@@ -374,13 +410,11 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
             alert_msg = (
                 "🚨 <b>RJN's AI — ALL PROXIES OVER!</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"❌ <b>proxy over, proxy - <code>{dead_desc}</code></b>\n"
+                f"❌ <b>Last Proxy:</b> <code>{dead_desc}</code>\n"
                 f"ℹ️ <b>Reason:</b> {reason}\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "⚠️ <b>Proxy pool is now EMPTY!</b>\n"
                 "Background workers are waiting for proxies.\n"
-                "Please send new proxies to bot now:\n"
-                "Format: <code>ip:port:username:password</code>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
             threading.Thread(target=send_telegram_admin_alert, args=(alert_msg,), daemon=True).start()
@@ -390,18 +424,28 @@ def handle_proxy_error(err_str, proxy_raw):
     err_lower = (err_str or "").lower()
     
     immediate_signals = [
-        ("402", "402 Payment Required (Bandwidth Quota Exhausted)"),
-        ("payment required", "402 Payment Required (Bandwidth Quota Exhausted)"),
+        ("402", "402 Payment Required"),
+        ("payment required", "402 Payment Required"),
         ("407", "407 Proxy Auth Required / Expired"),
         ("traffic limit", "Proxy Traffic Limit Reached (407)"),
         ("proxy auth", "407 Proxy Auth Required / Expired"),
-        ("tunnel", "Tunnel Connection Failed / Closed (Proxy Quota Reached)"),
+        ("tunnel", "Tunnel Connection Failed / Closed"),
         ("proxy connection", "Proxy Connection Failed / Refused"),
         ("err_proxy_connection_failed", "ERR_PROXY_CONNECTION_FAILED (Proxy Dead)"),
+        ("err_socks_connection_failed", "ERR_SOCKS_CONNECTION_FAILED (SOCKS Dead)"),
+        ("err_socks_connection_host_unreachable", "ERR_SOCKS_HOST_UNREACHABLE"),
         ("err_connection_closed", "ERR_CONNECTION_CLOSED (Proxy Closed)"),
         ("err_connection_reset", "ERR_CONNECTION_RESET (Proxy Reset)"),
+        ("err_connection_refused", "ERR_CONNECTION_REFUSED (Proxy Refused)"),
+        ("err_connection_aborted", "ERR_CONNECTION_ABORTED"),
+        ("err_timed_out", "ERR_TIMED_OUT (Proxy Timeout)"),
+        ("err_empty_response", "ERR_EMPTY_RESPONSE"),
+        ("err_name_not_resolved", "ERR_NAME_NOT_RESOLVED"),
+        ("connection refused", "Connection Refused"),
         ("quota", "Proxy Quota Reached"),
         ("bandwidth", "Proxy Bandwidth Quota Exhausted"),
+        ("timeout", "Navigation Timeout (Proxy Slow/Dead)"),
+        ("navigation error", "Navigation Error (Proxy Dead)"),
     ]
     
     for needle, reason in immediate_signals:
@@ -410,38 +454,10 @@ def handle_proxy_error(err_str, proxy_raw):
             mark_current_proxy_exhausted(proxy_raw, reason=reason)
             return
 
-    # Fallback for generic connection drops and timeouts
-    if "chrome-error" in err_lower or "net::err_" in err_lower or "timeout" in err_lower:
-        if "timeout" in err_lower:
-            try:
-                cfg = get_active_proxy_config()
-                if cfg:
-                    s = cfg['server'].replace("http://", "").replace("https://", "")
-                    u = cfg.get('username')
-                    p = cfg.get('password')
-                    p_url = f"http://{u}:{p}@{s}" if u and p else f"http://{s}"
-                    requests.get("http://www.google.com", proxies={"http": p_url, "https": p_url}, timeout=3)
-            except Exception as e_probe:
-                p_err = str(e_probe).lower()
-                if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "proxyerror" in p_err:
-                    print(f"[ProxyManager] ❌ Quota / Traffic limit confirmed via probe: {p_err[:60]}")
-                    mark_current_proxy_exhausted(proxy_raw, reason="Proxy Traffic Limit Reached (407)")
-                    return
-
-        should_rotate = False
-        with proxy_pool_lock:
-            pool = load_proxy_pool()
-            active = pool.get("active")
-            if active and (not proxy_raw or active.get("raw") == proxy_raw):
-                active["fail_count"] = active.get("fail_count", 0) + 1
-                fc = active["fail_count"]
-                save_proxy_pool(pool)
-                print(f"[ProxyManager] ⚠️ Connection notice for active proxy (Fail {fc}/2): {err_str[:40]}...")
-                if fc >= 2:
-                    should_rotate = True
-        if should_rotate:
-            print(f"[ProxyManager] ❌ Active proxy connection dropped / timed out. Rotating instantly now!")
-            mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Timeout / Dropped ({err_str[:30]})")
+    # Fallback for generic connection drops
+    if "chrome-error" in err_lower or "net::err_" in err_lower or "error" in err_lower:
+        print(f"[ProxyManager] ❌ Active proxy connection error ({err_str[:40]}). Rotating instantly!")
+        mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Error ({err_str[:30]})")
 
 def handle_proxy_success(proxy_raw):
     with proxy_pool_lock:
@@ -1047,7 +1063,7 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
             pass
 
         try:
-            page.goto(short_url, wait_until='domcontentloaded', timeout=18000)
+            page.goto(short_url, wait_until='domcontentloaded', timeout=12000)
         except Exception as e_nav:
             try:
                 context.close()
@@ -1302,12 +1318,12 @@ def worker_routine(worker_id):
                         if ok:
                             handle_proxy_success(raw_proxy)
                             print(f"[Worker #{worker_id}] ✅ Paid View Verified ({country_label}) -> {dest[:45]}!")
+                            worker_sleep = random.uniform(3.0, 6.0)
+                            time.sleep(worker_sleep)
                         else:
                             handle_proxy_error(dest, raw_proxy)
                             print(f"[Worker #{worker_id}] ℹ️ Cycle ended on {short_url}: {dest[:45]}...")
-
-                        worker_sleep = random.uniform(3.0, 6.0)
-                        time.sleep(worker_sleep)
+                            time.sleep(1.0)
                     except Exception as loop_e:
                         print(f"[Worker #{worker_id}] View error: {loop_e}")
                         time.sleep(3)
