@@ -89,8 +89,8 @@ RAW_PROXIES_FILE = resolve_path("raw_proxies.json", "/home/ipx/raw_proxies.json"
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://pr.oxylabs.io:7777')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'customer-resi_3c566610-cc-us')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'ERi_Y2ci1wLr')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'customer-resi_3801807f-cc-us')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'V~Jwzw8wIOKl')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -116,9 +116,13 @@ def parse_proxy_line(line):
             m_srv = re.search(r'-x\s+["\']?([^"\s\']+)', line)
             m_auth = re.search(r'-U\s+["\']?([^"\s\']+)', line)
             if m_srv and m_auth:
-                srv = m_srv.group(1).replace("http://", "").replace("https://", "")
+                raw_srv = m_srv.group(1).strip("\"'")
                 auth = m_auth.group(1).strip("\"'")
-                ip, port = srv.split(":")
+                for pfx in ['socks5h://', 'socks5://', 'socks4://', 'https://', 'http://']:
+                    if raw_srv.lower().startswith(pfx):
+                        raw_srv = raw_srv[len(pfx):]
+                        break
+                ip, port = raw_srv.split(":")
                 user, pwd = auth.split(":", 1)
                 return {
                     'server': f'http://{ip}:{port}',
@@ -264,7 +268,7 @@ def load_proxy_pool():
     cur_act = data.get("active")
     exhausted_raws = {e.get("raw") for e in data.get("exhausted", [])}
     cur_raw = cur_act.get("raw", "") if cur_act else ""
-    if not cur_act or cur_raw in exhausted_raws or "da5f213e" in cur_raw or "3dfee8b6" in cur_raw:
+    if not cur_act or cur_raw in exhausted_raws or "da5f213e" in cur_raw or "3dfee8b6" in cur_raw or "3c566610" in cur_raw:
         fresh_raw = fresh_default.get("raw", "")
         if fresh_raw and fresh_raw not in exhausted_raws:
             data["active"] = fresh_default
@@ -512,8 +516,9 @@ def handle_proxy_success(proxy_raw):
                 active["fail_count"] = 0
                 save_proxy_pool(pool)
 
-def add_proxies_to_pool(raw_text):
-    lines = (raw_text or "").strip().splitlines()
+def add_proxies_to_pool(raw_text, make_active=False):
+    clean_text = (raw_text or "").replace("https://ip.oxylabs.io/location", "")
+    lines = clean_text.replace(',', '\n').replace(';', '\n').splitlines()
     with proxy_pool_lock:
         pool = load_proxy_pool()
         active_or_backups = set()
@@ -525,22 +530,31 @@ def add_proxies_to_pool(raw_text):
         added_cnt = 0
         skipped_cnt = 0
         for line in lines:
+            line = line.strip()
+            if not line:
+                continue
             p = parse_proxy_line(line)
             if not p:
                 continue
-            if p["raw"] in active_or_backups:
-                skipped_cnt += 1
-                continue
             # Remove from exhausted if re-adding
             pool["exhausted"] = [e for e in pool.get("exhausted", []) if e.get("raw") != p["raw"]]
-            active_or_backups.add(p["raw"])
             p["added_at"] = time.time()
             p["fail_count"] = 0
-            if not pool.get("active"):
+            
+            # If explicit make_active, fresh residential proxy, or no active proxy currently
+            if make_active or "customer-resi" in p.get("username", "") or not pool.get("active"):
+                if pool.get("active") and pool["active"]["raw"] != p["raw"]:
+                    pool.setdefault("backups", []).insert(0, pool["active"])
                 pool["active"] = p
-            else:
+                make_active = False # only first item becomes active immediately
+                active_or_backups.add(p["raw"])
+                added_cnt += 1
+            elif p["raw"] not in active_or_backups:
+                active_or_backups.add(p["raw"])
                 pool.setdefault("backups", []).append(p)
-            added_cnt += 1
+                added_cnt += 1
+            else:
+                skipped_cnt += 1
 
         save_proxy_pool(pool)
         return added_cnt, skipped_cnt, pool
@@ -1823,6 +1837,50 @@ def run_telegram_bot():
                 save_proxy_pool(pool)
             bot.answer_callback_query(call.id, f"Cleared {cleared_count} dead proxies!")
             send_or_update_admin_card(chat_id, edit_msg_id=call.message.message_id)
+
+    @bot.message_handler(commands=['proxy', 'addproxy'])
+    def cmd_add_proxy(m):
+        chat_id = m.chat.id
+        if not is_user_authenticated(chat_id):
+            prompt_for_password(chat_id, m.message_id)
+            return
+        safe_delete(chat_id, m.message_id)
+        args = m.text.split(None, 1)
+        if len(args) > 1:
+            raw_text = args[1].strip()
+            added_cnt, skipped_cnt, pool = add_proxies_to_pool(raw_text, make_active=True)
+            active = pool.get("active", {})
+            resp = (
+                "⚡ <b>Fresh Proxy Instantly Activated!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🟢 <b>Active:</b> <code>{active.get('ip')}:{active.get('port')}</code>\n"
+                f"👤 <b>User:</b> <code>{active.get('username')}</code>\n"
+                f"📦 <b>Backups Queued:</b> <code>{len(pool.get('backups', []))}</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>All browser workers now routing through this proxy! 🚀</i>"
+            )
+            bot.send_message(chat_id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+        else:
+            bot.send_message(chat_id, "💡 <b>Usage:</b>\n<code>/proxy curl -x ...</code>\nOr simply paste your curl line or proxy directly into chat!", parse_mode="HTML")
+
+    @bot.message_handler(func=lambda m: is_user_authenticated(m.chat.id) and m.text and not m.text.startswith('/'))
+    def handle_quick_proxy_paste(m):
+        raw_text = (m.text or "").strip()
+        first_line = raw_text.splitlines()[0] if raw_text else ""
+        if parse_proxy_line(first_line):
+            safe_delete(m.chat.id, m.message_id)
+            added_cnt, skipped_cnt, pool = add_proxies_to_pool(raw_text, make_active=True)
+            active = pool.get("active", {})
+            resp = (
+                "⚡ <b>Fresh Proxy Instantly Activated!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🟢 <b>Active:</b> <code>{active.get('ip')}:{active.get('port')}</code>\n"
+                f"👤 <b>User:</b> <code>{active.get('username')}</code>\n"
+                f"📦 <b>Backups Queued:</b> <code>{len(pool.get('backups', []))}</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>All browser workers now routing through this proxy! 🚀</i>"
+            )
+            bot.send_message(m.chat.id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
 
     def auto_report_loop():
         print(f"[*] Hourly Auto-Report Daemon started for Admin: {ADMIN_CHAT_ID} (Every 1 Hour)")
