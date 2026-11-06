@@ -450,9 +450,7 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
         is_rotating_gw = any(k in current.get("server", "") or k in current.get("username", "") for k in ["pr.oxylabs.io", "customer-resi", "webshare", "pool-res"])
         if is_rotating_gw:
             if "407" not in reason and "auth" not in reason.lower() and "401" not in reason and "402" not in reason and "payment" not in reason.lower():
-                print(f"[ProxyManager] 🔄 Rotating gateway active ({reason}). Auto-rotating fresh IP for next cycle.")
                 current["fail_count"] = 0
-                save_proxy_pool(pool)
                 return current
             
         current["exhausted_at"] = time.time()
@@ -553,7 +551,6 @@ def handle_proxy_error(err_str, proxy_raw):
 
     # Fallback for generic connection drops
     if "chrome-error" in err_lower or "net::err_" in err_lower:
-        print(f"[ProxyManager] ❌ Active proxy connection error ({err_str[:40]}). Rotating instantly!")
         mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Error ({err_str[:30]})")
         return
 
@@ -1355,10 +1352,10 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
                 pass
 
         try:
-            page.goto(short_url, wait_until='domcontentloaded', timeout=18000)
+            page.goto(short_url, wait_until='domcontentloaded', timeout=25000)
         except Exception:
             try:
-                page.goto(short_url, wait_until='commit', timeout=18000)
+                page.goto(short_url, wait_until='commit', timeout=25000)
             except Exception as e_nav:
                 try:
                     context.close()
