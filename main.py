@@ -88,8 +88,8 @@ PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://pr.oxylabs.io:7777')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'customer-resi_3dfee8b6-cc-us')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'i1URq0Oz3_9s')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'customer-resi_da5f213e-cc-us')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'NDKrkO+WMH6f')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
