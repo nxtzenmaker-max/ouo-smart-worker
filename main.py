@@ -723,17 +723,17 @@ def broadcast_proxy_to_fleet(active_proxy, bot=None, chat_id=None, msg_id=None):
             cur_pool = load_proxy_pool()
             vps_backups = cur_pool.get("backups", [])
         vps_pool_json = json.dumps({"active": active_proxy, "backups": vps_backups, "exhausted": []})
+        import base64
+        b64_pool = base64.b64encode(vps_pool_json.encode()).decode()
         vps_cmds = f"""
-cat << 'EOFVPS' > /home/ipx/ouo-standalone/proxy_pool.json
-{vps_pool_json}
-EOFVPS
+echo '{b64_pool}' | base64 -d > /home/ipx/ouo-standalone/proxy_pool.json
 cp /home/ipx/ouo-standalone/proxy_pool.json /home/ipx/proxy_pool.json 2>/dev/null || true
 tmux kill-session -t ouo 2>/dev/null || true
 pkill -f 'main.py' || true
 sleep 1
 tmux new-session -d -s ouo 'cd /home/ipx/ouo-standalone && python3 -u main.py daemon --workers 1 2>&1 | tee -a ouo.log'
 """
-        stdin, stdout, stderr = ssh.exec_command(f'bash -c "{vps_cmds}"')
+        stdin, stdout, stderr = ssh.exec_command(vps_cmds)
         stdout.channel.recv_exit_status()
         ssh.close()
         sync_status.append("🟢 <b>Cloud VPS:</b> Synced & Running")
