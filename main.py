@@ -382,8 +382,24 @@ def handle_proxy_error(err_str, proxy_raw):
             mark_current_proxy_exhausted(proxy_raw, reason=reason)
             return
 
-    # Fallback for generic connection drops
-    if "chrome-error" in err_lower or "net::err_" in err_lower:
+    # Fallback for generic connection drops and timeouts
+    if "chrome-error" in err_lower or "net::err_" in err_lower or "timeout" in err_lower:
+        if "timeout" in err_lower:
+            try:
+                cfg = get_active_proxy_config()
+                if cfg:
+                    s = cfg['server'].replace("http://", "").replace("https://", "")
+                    u = cfg.get('username')
+                    p = cfg.get('password')
+                    p_url = f"http://{u}:{p}@{s}" if u and p else f"http://{s}"
+                    requests.get("http://www.google.com", proxies={"http": p_url, "https": p_url}, timeout=3)
+            except Exception as e_probe:
+                p_err = str(e_probe).lower()
+                if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "proxyerror" in p_err:
+                    print(f"[ProxyManager] ❌ Quota / Traffic limit confirmed via probe: {p_err[:60]}")
+                    mark_current_proxy_exhausted(proxy_raw, reason="Proxy Traffic Limit Reached (407)")
+                    return
+
         should_rotate = False
         with proxy_pool_lock:
             pool = load_proxy_pool()
@@ -396,8 +412,8 @@ def handle_proxy_error(err_str, proxy_raw):
                 if fc >= 2:
                     should_rotate = True
         if should_rotate:
-            print(f"[ProxyManager] ❌ Active proxy connection dropped. Rotating instantly now!")
-            mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Dropped ({err_str[:30]})")
+            print(f"[ProxyManager] ❌ Active proxy connection dropped / timed out. Rotating instantly now!")
+            mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Timeout / Dropped ({err_str[:30]})")
 
 def handle_proxy_success(proxy_raw):
     with proxy_pool_lock:
