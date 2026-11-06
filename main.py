@@ -87,9 +87,9 @@ AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
-VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://p.webshare.io:80')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'zdmmvlzl-US-rotate')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'p75yekxzcfe2')
+VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://2.59.171.104:9999')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'x7pkwzbttp-pool-res-country-US-mode-query-tier-premium')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'QOmzd45bodEaZL5S')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -111,28 +111,32 @@ def parse_proxy_line(line):
     if "webshare.to" in line:
         line = line.replace("webshare.to", "webshare.io")
 
-    if "curl" in line and "-U" in line:
+    if "curl" in line and "-x" in line:
         try:
             import re
-            m_srv = re.search(r'-x\s+["\']?([^"\s\']+)', line)
-            m_auth = re.search(r'-U\s+["\']?([^"\s\']+)', line)
-            if m_srv and m_auth:
-                raw_srv = m_srv.group(1).strip("\"'")
-                auth = m_auth.group(1).strip("\"'")
-                for pfx in ['socks5h://', 'socks5://', 'socks4://', 'https://', 'http://']:
-                    if raw_srv.lower().startswith(pfx):
-                        raw_srv = raw_srv[len(pfx):]
-                        break
-                ip, port = raw_srv.split(":")
-                user, pwd = auth.split(":", 1)
-                return {
-                    'server': f'http://{ip}:{port}',
-                    'ip': ip,
-                    'port': port,
-                    'username': user,
-                    'password': pwd,
-                    'raw': f'{ip}:{port}:{user}:{pwd}'
-                }
+            m_x = re.search(r'-x\s+["\']?([^"\s\']+)', line)
+            if m_x:
+                proxy_url = m_x.group(1).strip("\"'")
+                m_u = re.search(r'-U\s+["\']?([^"\s\']+)', line)
+                if m_u:
+                    auth = m_u.group(1).strip("\"'")
+                    user, pwd = auth.split(":", 1)
+                    srv = proxy_url
+                    for pfx in ['socks5h://', 'socks5://', 'socks4://', 'https://', 'http://']:
+                        if srv.lower().startswith(pfx):
+                            srv = srv[len(pfx):]
+                            break
+                    ip, port = srv.split(":")
+                    return {
+                        'server': f'http://{ip}:{port}',
+                        'ip': ip,
+                        'port': port,
+                        'username': user,
+                        'password': pwd,
+                        'raw': f'{ip}:{port}:{user}:{pwd}'
+                    }
+                else:
+                    line = proxy_url
         except Exception:
             pass
 
@@ -413,10 +417,10 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
             if c_raw != dead_raw and base_curr not in base_dead and base_dead not in base_curr and current.get("server", "") not in dead_raw:
                 return pool.get("active")
 
-        # Rotating gateway protection (Oxylabs & Webshare rotating proxies):
+        # Rotating gateway protection (Oxylabs, Webshare, & Evomi/Pool rotating proxies):
         # These gateways rotate to a fresh IP on each request.
         # Only true 407 (traffic limit), 402, or 401 means quota exhaustion!
-        is_rotating_gw = any(k in current.get("server", "") or k in current.get("username", "") for k in ["pr.oxylabs.io", "customer-resi", "webshare"])
+        is_rotating_gw = any(k in current.get("server", "") or k in current.get("username", "") for k in ["pr.oxylabs.io", "customer-resi", "webshare", "pool-res"])
         if is_rotating_gw:
             if "407" not in reason and "auth" not in reason.lower() and "401" not in reason and "402" not in reason and "payment" not in reason.lower():
                 print(f"[ProxyManager] 🔄 Rotating gateway active ({reason}). Auto-rotating fresh IP for next cycle.")
@@ -526,11 +530,11 @@ def handle_proxy_error(err_str, proxy_raw):
         mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Error ({err_str[:30]})")
         return
 
-    # For backup public proxies (non-Oxylabs / non-Webshare): failover after 2 consecutive failed cycles
+    # For backup public proxies (non-rotating): failover after 2 consecutive failed cycles
     with proxy_pool_lock:
         pool = load_proxy_pool()
         active = pool.get("active")
-        if active and "pr.oxylabs.io" not in active.get("server", "") and "customer-resi" not in active.get("username", "") and "webshare" not in active.get("server", "") and "webshare" not in active.get("username", ""):
+        if active and "pr.oxylabs.io" not in active.get("server", "") and "customer-resi" not in active.get("username", "") and "webshare" not in active.get("server", "") and "webshare" not in active.get("username", "") and "pool-res" not in active.get("username", ""):
             active["fail_count"] = active.get("fail_count", 0) + 1
             if active["fail_count"] >= 2:
                 print(f"[ProxyManager] ⚠️ Backup proxy {active.get('raw')} failed 2 times. Rotating to next backup proxy!")
