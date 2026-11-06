@@ -87,9 +87,9 @@ AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
-VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://pr.oxylabs.io:7777')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'customer-resi_22eeace0-cc-us')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'odU72=aG~s5V')
+VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://p.webshare.io:80')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'vcxyxyzq-US-rotate')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'wxbkv8009zys')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -108,6 +108,8 @@ def parse_proxy_line(line):
     line = (line or "").strip()
     if not line or line.startswith('#') or line.startswith('//'):
         return None
+    if "webshare.to" in line:
+        line = line.replace("webshare.to", "webshare.io")
 
     if "curl" in line and "-U" in line:
         try:
@@ -251,7 +253,7 @@ def load_proxy_pool():
     exhausted_raws = {e.get("raw") for e in data.get("exhausted", [])}
     cur_raw = cur_act.get("raw", "") if cur_act else ""
     is_public = cur_act and not cur_act.get("username")
-    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610", "3801807f", "a3ba31ef"])
+    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610", "3801807f", "a3ba31ef", "22eeace0"])
     
     if not cur_act or cur_raw in exhausted_raws or is_public or is_old_ox:
         fresh_raw = fresh_default.get("raw", "")
