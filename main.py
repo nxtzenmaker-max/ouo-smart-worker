@@ -88,8 +88,8 @@ PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://p.webshare.io:80')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'vcxyxyzq-US-rotate')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'wxbkv8009zys')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'zdmmvlzl-US-rotate')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'p75yekxzcfe2')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -243,7 +243,6 @@ def load_proxy_pool():
 
     # Queue backup proxies from default pool and env
     known_backups = [
-        "p.webshare.io:80:zdmmvlzl-US-rotate:p75yekxzcfe2",
         "p.webshare.io:80:gfcjqdlk-US-rotate:m2gx296o36tx"
     ]
     env_list = os.environ.get("OUO_PROXY_LIST", "")
@@ -253,9 +252,9 @@ def load_proxy_pool():
             if item:
                 known_backups.append(item)
 
-    # Strip any unauthenticated/public proxies from backups
+    # Strip any unauthenticated or known exhausted proxies from backups
     if data.get("backups"):
-        data["backups"] = [b for b in data["backups"] if b.get("username")]
+        data["backups"] = [b for b in data["backups"] if b.get("username") and "vcxyxyzq" not in b.get("raw", "")]
 
     existing_raws = set()
     if data.get("active"):
@@ -276,14 +275,12 @@ def load_proxy_pool():
                 existing_raws.add(kb)
                 updated = True
 
-    # If current active proxy is None, exhausted, unauthenticated, or old known exhausted Oxylabs
+    # If current active proxy is None, exhausted, unauthenticated, or old known exhausted Oxylabs / Webshare
     cur_act = data.get("active")
-    if "webshare" in fresh_default.get("raw", ""):
-        data["exhausted"] = [e for e in data.get("exhausted", []) if "webshare" not in e.get("raw", "")]
     exhausted_raws = {e.get("raw") for e in data.get("exhausted", [])}
     cur_raw = cur_act.get("raw", "") if cur_act else ""
     is_public = cur_act and not cur_act.get("username")
-    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610", "3801807f", "a3ba31ef", "22eeace0"])
+    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610", "3801807f", "a3ba31ef", "22eeace0", "vcxyxyzq"])
     
     if not cur_act or cur_raw in exhausted_raws or is_public or is_old_ox:
         fresh_raw = fresh_default.get("raw", "")
@@ -421,7 +418,7 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
         # Only true 407 (traffic limit), 402, or 401 means quota exhaustion!
         is_rotating_gw = any(k in current.get("server", "") or k in current.get("username", "") for k in ["pr.oxylabs.io", "customer-resi", "webshare"])
         if is_rotating_gw:
-            if "407" not in reason and "auth" not in reason.lower() and "401" not in reason and "402" not in reason:
+            if "407" not in reason and "auth" not in reason.lower() and "401" not in reason and "402" not in reason and "payment" not in reason.lower():
                 print(f"[ProxyManager] 🔄 Rotating gateway active ({reason}). Auto-rotating fresh IP for next cycle.")
                 current["fail_count"] = 0
                 save_proxy_pool(pool)
@@ -477,10 +474,10 @@ def handle_proxy_error(err_str, proxy_raw):
     immediate_signals = [
         ("402", "402 Payment Required"),
         ("payment required", "402 Payment Required"),
+        ("payment", "402 Payment Required"),
         ("407", "407 Proxy Auth Required / Expired"),
         ("traffic limit", "Proxy Traffic Limit Reached (407)"),
         ("proxy auth", "407 Proxy Auth Required / Expired"),
-        ("tunnel", "Tunnel Connection Failed / Closed"),
         ("proxy connection", "Proxy Connection Failed / Refused"),
         ("err_proxy_connection_failed", "ERR_PROXY_CONNECTION_FAILED (Proxy Dead)"),
         ("err_socks_connection_failed", "ERR_SOCKS_CONNECTION_FAILED (SOCKS Dead)"),
@@ -503,7 +500,7 @@ def handle_proxy_error(err_str, proxy_raw):
             mark_current_proxy_exhausted(proxy_raw, reason=reason)
             return
 
-    if "timeout" in err_lower or "navigation" in err_lower or err_str.startswith("http"):
+    if "timeout" in err_lower or "navigation" in err_lower or "tunnel" in err_lower or "net::err_" in err_lower or err_str.startswith("http"):
         try:
             cfg = get_active_proxy_config()
             if cfg:
@@ -518,9 +515,9 @@ def handle_proxy_error(err_str, proxy_raw):
                     return
         except Exception as e_probe:
             p_err = str(e_probe).lower()
-            if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "proxyerror" in p_err:
+            if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "payment" in p_err or "proxyerror" in p_err:
                 print(f"[ProxyManager] ❌ Quota / Traffic limit confirmed via probe: {p_err[:60]}")
-                mark_current_proxy_exhausted(proxy_raw, reason="Proxy Traffic Limit Reached (407)")
+                mark_current_proxy_exhausted(proxy_raw, reason="Proxy Quota / Payment Required (402)")
                 return
 
     # Fallback for generic connection drops
