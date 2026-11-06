@@ -1975,7 +1975,10 @@ if __name__ == '__main__':
     if len(sys.argv) == 1 and os.environ.get("PORT"):
         print("[*] Cloud environment detected (PORT set). Auto-launching: daemon + bot + health server")
         threading.Thread(target=run_health_server, daemon=True).start()
-        threading.Thread(target=run_telegram_bot, daemon=True).start()
+        if os.environ.get("ENABLE_TELEGRAM_BOT", "false").lower() in ("true", "1", "yes"):
+            threading.Thread(target=run_telegram_bot, daemon=True).start()
+        else:
+            print("[*] Telegram bot disabled on this instance (Worker mode only).")
         run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True)
     else:
         main()
