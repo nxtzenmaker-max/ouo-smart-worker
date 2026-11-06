@@ -162,7 +162,7 @@ def parse_proxy_line(line):
                 }
         except Exception:
             return None
-    parts = line.split(':', 3)
+    parts = line.split(':')
     if len(parts) == 4 and parts[1].isdigit():
         ip, port, user, pwd = parts
         return {
@@ -171,18 +171,43 @@ def parse_proxy_line(line):
             'port': port,
             'username': user,
             'password': pwd,
-            'raw': orig_line
+            'raw': f'{ip}:{port}:{user}:{pwd}'
         }
-    elif len(parts) == 2 and parts[1].isdigit():
-        ip, port = parts
-        return {
-            'server': f'{proto}://{ip}:{port}',
-            'ip': ip,
-            'port': port,
-            'username': '',
-            'password': '',
-            'raw': orig_line
-        }
+    elif len(parts) == 2:
+        if parts[1].isdigit() and ('.' in parts[0] or parts[0] == 'localhost'):
+            ip, port = parts
+            return {
+                'server': f'{proto}://{ip}:{port}',
+                'ip': ip,
+                'port': port,
+                'username': '',
+                'password': '',
+                'raw': f'{ip}:{port}'
+            }
+        else:
+            # Format: username:password (Webshare US rotating gateway default)
+            user, pwd = parts[0].strip(), parts[1].strip()
+            if user and pwd:
+                return {
+                    'server': 'http://p.webshare.io:80',
+                    'ip': 'p.webshare.io',
+                    'port': '80',
+                    'username': user,
+                    'password': pwd,
+                    'raw': f'p.webshare.io:80:{user}:{pwd}'
+                }
+    elif len(parts) == 3 and not parts[1].isdigit():
+        # Format: username:password:notes
+        user, pwd = parts[0].strip(), parts[1].strip()
+        if user and pwd:
+            return {
+                'server': 'http://p.webshare.io:80',
+                'ip': 'p.webshare.io',
+                'port': '80',
+                'username': user,
+                'password': pwd,
+                'raw': f'p.webshare.io:80:{user}:{pwd}'
+            }
     return None
 
 def load_proxy_pool():
@@ -531,12 +556,6 @@ def add_proxies_to_pool(raw_text, make_active=False):
     lines = clean_text.replace(',', '\n').replace(';', '\n').splitlines()
     with proxy_pool_lock:
         pool = load_proxy_pool()
-        active_or_backups = set()
-        if pool.get("active"):
-            active_or_backups.add(pool["active"]["raw"])
-        for b in pool.get("backups", []):
-            active_or_backups.add(b["raw"])
-
         added_cnt = 0
         skipped_cnt = 0
         for line in lines:
@@ -553,18 +572,15 @@ def add_proxies_to_pool(raw_text, make_active=False):
             
             # If explicit make_active, fresh residential proxy, or no active proxy currently
             if make_active or "customer-resi" in p.get("username", "") or not pool.get("active"):
-                if pool.get("active") and pool["active"]["raw"] != p["raw"]:
+                if pool.get("active") and pool["active"].get("raw") != p["raw"]:
                     pool.setdefault("backups", []).insert(0, pool["active"])
                 pool["active"] = p
                 make_active = False # only first item becomes active immediately
-                active_or_backups.add(p["raw"])
-                added_cnt += 1
-            elif p["raw"] not in active_or_backups:
-                active_or_backups.add(p["raw"])
-                pool.setdefault("backups", []).append(p)
                 added_cnt += 1
             else:
-                skipped_cnt += 1
+                # Direct pool append (+1 to pool count, never skipped)
+                pool.setdefault("backups", []).append(p)
+                added_cnt += 1
 
         save_proxy_pool(pool)
         return added_cnt, skipped_cnt, pool
@@ -702,7 +718,10 @@ def broadcast_proxy_to_fleet(active_proxy, bot=None, chat_id=None, msg_id=None):
             password=VPS_FLEET_CONFIG["pass"],
             timeout=8
         )
-        vps_pool_json = json.dumps({"active": active_proxy, "backups": [], "exhausted": []})
+        with proxy_pool_lock:
+            cur_pool = load_proxy_pool()
+            vps_backups = cur_pool.get("backups", [])
+        vps_pool_json = json.dumps({"active": active_proxy, "backups": vps_backups, "exhausted": []})
         vps_cmds = f"""
 cat << 'EOFVPS' > /home/ipx/ouo-standalone/proxy_pool.json
 {vps_pool_json}
@@ -711,7 +730,7 @@ cp /home/ipx/ouo-standalone/proxy_pool.json /home/ipx/proxy_pool.json 2>/dev/nul
 tmux kill-session -t ouo 2>/dev/null || true
 pkill -f 'main.py' || true
 sleep 1
-tmux new-session -d -s ouo 'cd /home/ipx/ouo-standalone && python3 -u main.py daemon --workers 1 2>&1 | tee ouo.log'
+tmux new-session -d -s ouo 'cd /home/ipx/ouo-standalone && python3 -u main.py daemon --workers 1 2>&1 | tee -a ouo.log'
 """
         stdin, stdout, stderr = ssh.exec_command(f'bash -c "{vps_cmds}"')
         stdout.channel.recv_exit_status()
@@ -1871,22 +1890,22 @@ def run_telegram_bot():
             parts = txt.split(None, 1)
             proxy_payload = parts[1].strip() if len(parts) > 1 else ""
 
-        first_line = proxy_payload.splitlines()[0] if proxy_payload else ""
-        if parse_proxy_line(first_line):
+        proxy_lines = [l.strip() for l in proxy_payload.splitlines() if l.strip()]
+        if proxy_lines and any(parse_proxy_line(l) for l in proxy_lines):
             added_cnt, skipped_cnt, pool = add_proxies_to_pool(proxy_payload, make_active=True)
             active = pool.get("active", {})
             active_str = active.get("raw") if active else "None"
             backups_cnt = len(pool.get("backups", []))
             
             resp_text = (
-                "⚡ <b>Fresh Proxy Instantly Activated!</b>\n"
+                f"⚡ <b>{added_cnt} Proxy Added to Fleet Pool!</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🟢 <b>Active:</b> <code>{active.get('ip', 'Residential')}:{active.get('port', '7777')}</code>\n"
+                f"🟢 <b>Active:</b> <code>{active.get('ip', 'p.webshare.io')}:{active.get('port', '80')}</code>\n"
                 f"👤 <b>User:</b> <code>{active.get('username')}</code>\n"
-                f"📦 <b>Backups Queued:</b> <code>{backups_cnt}</code> proxies ready\n"
+                f"📦 <b>Pool Total:</b> <code>{backups_cnt + (1 if active else 0)}</code> proxies ready (+{added_cnt})\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "<i>Node 0 active! 🚀</i>\n"
-                "📡 <i>Broadcasting to all 5 remote fleet nodes in background...</i>"
+                "📡 <i>Broadcasting active proxy to all 5 remote fleet nodes in background...</i>"
             )
             sent_msg = bot.send_message(chat_id, resp_text, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
             threading.Thread(target=broadcast_proxy_to_fleet, args=(active, bot, chat_id, sent_msg.message_id), daemon=True).start()
@@ -1943,32 +1962,33 @@ def run_telegram_bot():
                 chat_id,
                 "📥 <b>Send Proxies:</b>\n\n"
                 "Please paste your proxies in chat in format:\n"
-                "<code>ip:port:username:password</code>\n\n"
-                "<i>(If sending multiple, put one per line)</i>",
+                "<code>username:password</code>\n"
+                "<i>(Line by line if multiple, default Webshare US rotating)</i>\n\n"
+                "Or standard: <code>ip:port:username:password</code>",
                 reply_markup=prompt_markup
             )
             def process_proxy_input(m):
                 safe_delete(chat_id, m.message_id)
                 safe_delete(chat_id, msg.message_id)
                 input_text = (m.text or "").strip()
-                first_line = input_text.splitlines()[0] if input_text else ""
-                if not parse_proxy_line(first_line):
-                    bot.send_message(chat_id, "❌ <b>Invalid proxy format!</b>\nUse: <code>ip:port:username:password</code>", reply_markup=get_admin_inline_markup())
+                p_lines = [l.strip() for l in input_text.splitlines() if l.strip()]
+                if not any(parse_proxy_line(l) for l in p_lines):
+                    bot.send_message(chat_id, "❌ <b>Invalid proxy format!</b>\nUse: <code>username:password</code> (one per line) or <code>ip:port:username:password</code>", reply_markup=get_admin_inline_markup())
                     return
-                added_cnt, skipped_cnt, pool = add_proxies_to_pool(input_text)
-                active = pool.get("active")
-                active_str = active.get("raw") if active else "None"
+                added_cnt, skipped_cnt, pool = add_proxies_to_pool(input_text, make_active=True)
+                active = pool.get("active", {})
                 backups_cnt = len(pool.get("backups", []))
                 resp = (
-                    "✅ <b>Proxies Successfully Added to Pool!</b>\n"
+                    f"✅ <b>{added_cnt} Proxies Successfully Added to Pool!</b>\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"➕ <b>Added:</b> <code>{added_cnt}</code> proxy(s)\n"
-                    f"⏭️ <b>Skipped (Duplicates):</b> <code>{skipped_cnt}</code>\n"
-                    f"🟢 <b>Active:</b> <code>{active_str}</code>\n"
-                    f"📦 <b>Backups Queued:</b> <code>{backups_cnt}</code>\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    f"🟢 <b>Active:</b> <code>{active.get('raw')}</code>\n"
+                    f"📦 <b>Pool Total:</b> <code>{backups_cnt + (1 if active else 0)}</code> proxies ready\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "📡 <i>Broadcasting to all fleet nodes in background...</i>"
                 )
-                bot.send_message(chat_id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+                sent_msg = bot.send_message(chat_id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+                threading.Thread(target=broadcast_proxy_to_fleet, args=(active, bot, chat_id, sent_msg.message_id), daemon=True).start()
             bot.register_next_step_handler(msg, process_proxy_input)
         elif data == "cb_admin_view_pool":
             bot.answer_callback_query(call.id)
