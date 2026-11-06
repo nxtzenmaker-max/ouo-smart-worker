@@ -108,6 +108,28 @@ def parse_proxy_line(line):
     line = (line or "").strip()
     if not line or line.startswith('#') or line.startswith('//'):
         return None
+
+    if "curl" in line and "-U" in line:
+        try:
+            import re
+            m_srv = re.search(r'-x\s+["\']?([^"\s\']+)', line)
+            m_auth = re.search(r'-U\s+["\']?([^"\s\']+)', line)
+            if m_srv and m_auth:
+                srv = m_srv.group(1).replace("http://", "").replace("https://", "")
+                auth = m_auth.group(1).strip("\"'")
+                ip, port = srv.split(":")
+                user, pwd = auth.split(":", 1)
+                return {
+                    'server': f'http://{ip}:{port}',
+                    'ip': ip,
+                    'port': port,
+                    'username': user,
+                    'password': pwd,
+                    'raw': f'{ip}:{port}:{user}:{pwd}'
+                }
+        except Exception:
+            pass
+
     for prefix in ['http://', 'https://', 'socks5://', 'socks4://']:
         if line.startswith(prefix):
             line = line[len(prefix):]
@@ -184,6 +206,12 @@ def load_proxy_pool():
 
     # Automatically queue fresh backup proxies if not already present
     known_backups = []
+    env_list = os.environ.get("OUO_PROXY_LIST", "")
+    if env_list:
+        for item in env_list.replace(";", "\n").replace("|", "\n").splitlines():
+            item = item.strip()
+            if item:
+                known_backups.append(item)
     existing_raws = set()
     if data.get("active"):
         existing_raws.add(data["active"].get("raw"))
