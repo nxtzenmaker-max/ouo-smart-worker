@@ -1853,25 +1853,31 @@ def run_telegram_bot():
             prompt_for_password(chat_id)
             return
 
-        # Check if message contains proxy lines (e.g. ip:port:user:pass)
-        first_line = txt.splitlines()[0] if txt else ""
+        # Check if message contains /proxy command or raw proxy line
+        proxy_payload = txt
+        if txt.startswith('/proxy') or txt.startswith('/addproxy'):
+            parts = txt.split(None, 1)
+            proxy_payload = parts[1].strip() if len(parts) > 1 else ""
+
+        first_line = proxy_payload.splitlines()[0] if proxy_payload else ""
         if parse_proxy_line(first_line):
-            added_cnt, skipped_cnt, pool = add_proxies_to_pool(txt)
-            active = pool.get("active")
+            added_cnt, skipped_cnt, pool = add_proxies_to_pool(proxy_payload, make_active=True)
+            active = pool.get("active", {})
             active_str = active.get("raw") if active else "None"
             backups_cnt = len(pool.get("backups", []))
             
             resp_text = (
-                "✅ <b>Proxies Processed & Saved to Pool!</b>\n"
+                "⚡ <b>Fresh Proxy Instantly Activated!</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"➕ <b>Added to Pool:</b> <code>{added_cnt}</code> new proxy(s)\n"
-                f"⏭️ <b>Skipped (Duplicates):</b> <code>{skipped_cnt}</code>\n"
-                f"🟢 <b>Active Working Proxy:</b> <code>{active_str}</code>\n"
-                f"📦 <b>Queued Backups:</b> <code>{backups_cnt}</code> proxies ready\n"
+                f"🟢 <b>Active:</b> <code>{active.get('ip', 'Residential')}:{active.get('port', '7777')}</code>\n"
+                f"👤 <b>User:</b> <code>{active.get('username')}</code>\n"
+                f"📦 <b>Backups Queued:</b> <code>{backups_cnt}</code> proxies ready\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Auto-failover active. If active proxy exhausts (402/dead), bot will switch to next backup and alert you.</i>"
+                "<i>Node 0 active! 🚀</i>\n"
+                "📡 <i>Broadcasting to all 5 remote fleet nodes in background...</i>"
             )
-            bot.send_message(chat_id, resp_text, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+            sent_msg = bot.send_message(chat_id, resp_text, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+            threading.Thread(target=broadcast_proxy_to_fleet, args=(active, bot, chat_id, sent_msg.message_id), daemon=True).start()
             return
 
         send_or_update_status_card(chat_id)
@@ -2005,54 +2011,6 @@ def run_telegram_bot():
                 save_proxy_pool(pool)
             bot.answer_callback_query(call.id, f"Cleared {cleared_count} dead proxies!")
             send_or_update_admin_card(chat_id, edit_msg_id=call.message.message_id)
-
-    @bot.message_handler(commands=['proxy', 'addproxy'])
-    def cmd_add_proxy(m):
-        chat_id = m.chat.id
-        if not is_user_authenticated(chat_id):
-            prompt_for_password(chat_id, m.message_id)
-            return
-        safe_delete(chat_id, m.message_id)
-        args = m.text.split(None, 1)
-        if len(args) > 1:
-            raw_text = args[1].strip()
-            added_cnt, skipped_cnt, pool = add_proxies_to_pool(raw_text, make_active=True)
-            active = pool.get("active", {})
-            resp = (
-                "⚡ <b>Fresh Proxy Instantly Activated!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🟢 <b>Active:</b> <code>{active.get('ip')}:{active.get('port')}</code>\n"
-                f"👤 <b>User:</b> <code>{active.get('username')}</code>\n"
-                f"📦 <b>Backups Queued:</b> <code>{len(pool.get('backups', []))}</code>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Node 0 active! 🚀</i>\n"
-                "📡 <i>Broadcasting to all 5 remote fleet nodes...</i>"
-            )
-            sent_msg = bot.send_message(chat_id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
-            threading.Thread(target=broadcast_proxy_to_fleet, args=(active, bot, chat_id, sent_msg.message_id), daemon=True).start()
-        else:
-            bot.send_message(chat_id, "💡 <b>Usage:</b>\n<code>/proxy curl -x ...</code>\nOr simply paste your curl line or proxy directly into chat!", parse_mode="HTML")
-
-    @bot.message_handler(func=lambda m: is_user_authenticated(m.chat.id) and m.text and not m.text.startswith('/'))
-    def handle_quick_proxy_paste(m):
-        raw_text = (m.text or "").strip()
-        first_line = raw_text.splitlines()[0] if raw_text else ""
-        if parse_proxy_line(first_line):
-            safe_delete(m.chat.id, m.message_id)
-            added_cnt, skipped_cnt, pool = add_proxies_to_pool(raw_text, make_active=True)
-            active = pool.get("active", {})
-            resp = (
-                "⚡ <b>Fresh Proxy Instantly Activated!</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🟢 <b>Active:</b> <code>{active.get('ip')}:{active.get('port')}</code>\n"
-                f"👤 <b>User:</b> <code>{active.get('username')}</code>\n"
-                f"📦 <b>Backups Queued:</b> <code>{len(pool.get('backups', []))}</code>\n"
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Node 0 active! 🚀</i>\n"
-                "📡 <i>Broadcasting to all 5 remote fleet nodes...</i>"
-            )
-            sent_msg = bot.send_message(m.chat.id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
-            threading.Thread(target=broadcast_proxy_to_fleet, args=(active, bot, m.chat.id, sent_msg.message_id), daemon=True).start()
 
     def auto_report_loop():
         print(f"[*] Hourly Auto-Report Daemon started for Admin: {ADMIN_CHAT_ID} (Every 1 Hour)")
