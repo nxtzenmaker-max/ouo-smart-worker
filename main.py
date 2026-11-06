@@ -457,8 +457,6 @@ def handle_proxy_error(err_str, proxy_raw):
         ("connection refused", "Connection Refused"),
         ("quota", "Proxy Quota Reached"),
         ("bandwidth", "Proxy Bandwidth Quota Exhausted"),
-        ("timeout", "Navigation Timeout (Proxy Slow/Dead)"),
-        ("navigation error", "Navigation Error (Proxy Dead)"),
     ]
     
     for needle, reason in immediate_signals:
@@ -466,6 +464,22 @@ def handle_proxy_error(err_str, proxy_raw):
             print(f"[ProxyManager] ❌ Quota / Proxy failure detected instantly: {reason}")
             mark_current_proxy_exhausted(proxy_raw, reason=reason)
             return
+
+    if "timeout" in err_lower:
+        try:
+            cfg = get_active_proxy_config()
+            if cfg:
+                s = cfg['server'].replace("http://", "").replace("https://", "").replace("socks5://", "")
+                u = cfg.get('username')
+                p = cfg.get('password')
+                p_url = f"http://{u}:{p}@{s}" if u and p else f"http://{s}"
+                requests.get("http://www.google.com", proxies={"http": p_url, "https": p_url}, timeout=3)
+        except Exception as e_probe:
+            p_err = str(e_probe).lower()
+            if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "proxyerror" in p_err:
+                print(f"[ProxyManager] ❌ Quota / Traffic limit confirmed via probe: {p_err[:60]}")
+                mark_current_proxy_exhausted(proxy_raw, reason="Proxy Traffic Limit Reached (407)")
+                return
 
     # Fallback for generic connection drops
     if "chrome-error" in err_lower or "net::err_" in err_lower or "error" in err_lower:
@@ -1057,6 +1071,10 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
             try:
                 req = route.request
                 u = req.url
+                # Allow Cloudflare challenges and turnstile
+                if 'cloudflare' in u or 'challenges' in u:
+                    return route.continue_()
+
                 # If destination page hit: abort all heavy assets immediately!
                 if 'ouo.io' not in u and 'ouo.press' not in u:
                     if req.resource_type in ["image", "media", "font", "stylesheet", "other", "xhr", "fetch"]:
@@ -1082,7 +1100,7 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
             pass
 
         try:
-            page.goto(short_url, wait_until='domcontentloaded', timeout=12000)
+            page.goto(short_url, wait_until='domcontentloaded', timeout=22000)
         except Exception as e_nav:
             try:
                 context.close()
