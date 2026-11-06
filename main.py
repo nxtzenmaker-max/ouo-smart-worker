@@ -140,6 +140,33 @@ def parse_proxy_line(line):
         except Exception:
             pass
 
+    import re
+    # Match user:pass@ip:port (including with comments/trailing text)
+    m_at = re.search(r'(?:https?://)?([^:@\s]+):([^:@\s]+)@([0-9a-zA-Z\.-]+):(\d+)', line)
+    if m_at:
+        u, p, host, port = m_at.groups()
+        return {
+            'server': f'http://{host}:{port}',
+            'ip': host,
+            'port': port,
+            'username': u,
+            'password': p,
+            'raw': f'{host}:{port}:{u}:{p}'
+        }
+
+    # Match ip:port:user:pass (including with comments/trailing text)
+    m_colon = re.search(r'([0-9a-zA-Z\.-]+):(\d+):([^:@\s]+):([^:@\s]+)', line)
+    if m_colon and ('.' in m_colon.group(1) or m_colon.group(1) == 'localhost'):
+        host, port, u, p = m_colon.groups()
+        return {
+            'server': f'http://{host}:{port}',
+            'ip': host,
+            'port': port,
+            'username': u,
+            'password': p,
+            'raw': f'{host}:{port}:{u}:{p}'
+        }
+
     orig_line = line
     proto = "http"
     for prefix in ['socks5://', 'socks4://', 'https://', 'http://']:
@@ -247,7 +274,7 @@ def load_proxy_pool():
 
     # Queue backup proxies from default pool and env
     known_backups = [
-        "p.webshare.io:80:gfcjqdlk-US-rotate:m2gx296o36tx"
+        "190.2.137.56:9999:2eyki2vkiv-pool-res-country-US-mode-query-tier-premium:dRcs6XbB3Av9v8Ug"
     ]
     env_list = os.environ.get("OUO_PROXY_LIST", "")
     if env_list:
