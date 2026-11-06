@@ -250,6 +250,8 @@ def load_proxy_pool():
 
     # If current active proxy is None, exhausted, unauthenticated, or old known exhausted Oxylabs
     cur_act = data.get("active")
+    if "webshare" in fresh_default.get("raw", ""):
+        data["exhausted"] = [e for e in data.get("exhausted", []) if "webshare" not in e.get("raw", "")]
     exhausted_raws = {e.get("raw") for e in data.get("exhausted", [])}
     cur_raw = cur_act.get("raw", "") if cur_act else ""
     is_public = cur_act and not cur_act.get("username")
@@ -386,12 +388,13 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
             if c_raw != dead_raw and base_curr not in base_dead and base_dead not in base_curr and current.get("server", "") not in dead_raw:
                 return pool.get("active")
 
-        # Oxylabs rotating residential gateway protection:
-        # Oxylabs rotates to a fresh residential IP on each request.
+        # Rotating gateway protection (Oxylabs & Webshare rotating proxies):
+        # These gateways rotate to a fresh IP on each request.
         # Only true 407 (traffic limit), 402, or 401 means quota exhaustion!
-        if "pr.oxylabs.io" in current.get("server", "") or "customer-resi" in current.get("username", ""):
+        is_rotating_gw = any(k in current.get("server", "") or k in current.get("username", "") for k in ["pr.oxylabs.io", "customer-resi", "webshare"])
+        if is_rotating_gw:
             if "407" not in reason and "auth" not in reason.lower() and "401" not in reason and "402" not in reason:
-                print(f"[ProxyManager] 🔄 Oxylabs residential gateway active ({reason}). Auto-rotating fresh residential IP for next cycle.")
+                print(f"[ProxyManager] 🔄 Rotating gateway active ({reason}). Auto-rotating fresh IP for next cycle.")
                 current["fail_count"] = 0
                 save_proxy_pool(pool)
                 return current
