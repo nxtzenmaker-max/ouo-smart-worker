@@ -87,9 +87,9 @@ AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
-VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://2.59.171.104:9999')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'x7pkwzbttp-pool-res-country-US-mode-query-tier-premium')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'QOmzd45bodEaZL5S')
+VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://190.2.137.56:9999')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', '2eyki2vkiv-pool-res-country-US-mode-query-tier-premium')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'dRcs6XbB3Av9v8Ug')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -311,7 +311,7 @@ def load_proxy_pool():
     exhausted_raws = {e.get("raw") for e in data.get("exhausted", [])}
     cur_raw = cur_act.get("raw", "") if cur_act else ""
     is_public = cur_act and not cur_act.get("username")
-    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610", "3801807f", "a3ba31ef", "22eeace0", "vcxyxyzq"])
+    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610", "3801807f", "a3ba31ef", "22eeace0", "vcxyxyzq", "x7pkwzbttp"])
     
     if not cur_act or cur_raw in exhausted_raws or is_public or is_old_ox:
         fresh_raw = fresh_default.get("raw", "")
