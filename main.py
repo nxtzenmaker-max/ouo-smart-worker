@@ -504,11 +504,11 @@ def handle_proxy_error(err_str, proxy_raw):
         mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Error ({err_str[:30]})")
         return
 
-    # For backup public proxies (non-Oxylabs): failover after 2 consecutive failed cycles
+    # For backup public proxies (non-Oxylabs / non-Webshare): failover after 2 consecutive failed cycles
     with proxy_pool_lock:
         pool = load_proxy_pool()
         active = pool.get("active")
-        if active and "pr.oxylabs.io" not in active.get("server", "") and "customer-resi" not in active.get("username", ""):
+        if active and "pr.oxylabs.io" not in active.get("server", "") and "customer-resi" not in active.get("username", "") and "webshare" not in active.get("server", "") and "webshare" not in active.get("username", ""):
             active["fail_count"] = active.get("fail_count", 0) + 1
             if active["fail_count"] >= 2:
                 print(f"[ProxyManager] ⚠️ Backup proxy {active.get('raw')} failed 2 times. Rotating to next backup proxy!")
