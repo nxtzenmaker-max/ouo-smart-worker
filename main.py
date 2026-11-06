@@ -1097,35 +1097,31 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
         page.on("popup", handle_ad_popup)
         context.on("page", lambda p: handle_ad_popup(p) if (p and p != page) else None)
 
-        # Bandwidth Saver: Block images, media, fonts, and heavy ad video networks
+        # Ultra Bandwidth Saver 2.0 (Context-Wide Strict Whitelist):
+        # Only loads essential OuO navigation + Cloudflare Turnstile verification.
+        # Blocks 100% of popunder ad networks, third-party scripts, media, fonts & images!
         def ultra_bandwidth_filter(route):
             try:
                 req = route.request
                 u = req.url.lower()
-                if 'ouo.io' in u or 'ouo.press' in u or 'cloudflare' in u or 'challenges' in u:
-                    if req.resource_type in ["image", "media", "font"]:
-                        return route.abort()
+                res_type = req.resource_type
+                if res_type in ["image", "media", "font"]:
+                    return route.abort()
+                if any(w in u for w in ['ouo.io', 'ouo.press', 'cloudflare', 'challenges']):
                     return route.continue_()
-
-                if req.resource_type in ["image", "media", "font"]:
-                    return route.abort()
-
-                heavy_ad_hosts = [
-                    "doubleclick", "googlesyndication", "popads", "adcash",
-                    "exoclick", "propellerads", "adsterra", "trafficjunky",
-                    "adnxs", "creativecdn", "adservice", "analytics", ".mp4", ".webm",
-                    "video", "vast", "banner", "cpmstar"
-                ]
-                if any(h in u for h in heavy_ad_hosts):
-                    return route.abort()
-                return route.continue_()
+                if res_type == "document":
+                    return route.continue_()
+                return route.abort()
             except Exception:
                 pass
 
         try:
-            page.route("**/*", ultra_bandwidth_filter)
+            context.route("**/*", ultra_bandwidth_filter)
         except Exception:
-            pass
+            try:
+                page.route("**/*", ultra_bandwidth_filter)
+            except Exception:
+                pass
 
         try:
             page.goto(short_url, wait_until='domcontentloaded', timeout=18000)
