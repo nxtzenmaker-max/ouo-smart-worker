@@ -465,7 +465,7 @@ def handle_proxy_error(err_str, proxy_raw):
             mark_current_proxy_exhausted(proxy_raw, reason=reason)
             return
 
-    if "timeout" in err_lower:
+    if "timeout" in err_lower or "navigation" in err_lower or err_str.startswith("http"):
         try:
             cfg = get_active_proxy_config()
             if cfg:
@@ -473,7 +473,11 @@ def handle_proxy_error(err_str, proxy_raw):
                 u = cfg.get('username')
                 p = cfg.get('password')
                 p_url = f"http://{u}:{p}@{s}" if u and p else f"http://{s}"
-                requests.get("http://www.google.com", proxies={"http": p_url, "https": p_url}, timeout=3)
+                r_probe = requests.get("https://www.google.com", proxies={"http": p_url, "https": p_url}, timeout=4)
+                if r_probe.status_code in (407, 402, 401):
+                    print(f"[ProxyManager] ❌ Quota / Traffic limit confirmed via probe HTTP {r_probe.status_code}")
+                    mark_current_proxy_exhausted(proxy_raw, reason=f"Proxy HTTP {r_probe.status_code} Limit Reached")
+                    return
         except Exception as e_probe:
             p_err = str(e_probe).lower()
             if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "proxyerror" in p_err:
