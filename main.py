@@ -365,6 +365,7 @@ def handle_proxy_error(err_str, proxy_raw):
         ("402", "402 Payment Required (Bandwidth Quota Exhausted)"),
         ("payment required", "402 Payment Required (Bandwidth Quota Exhausted)"),
         ("407", "407 Proxy Auth Required / Expired"),
+        ("traffic limit", "Proxy Traffic Limit Reached (407)"),
         ("proxy auth", "407 Proxy Auth Required / Expired"),
         ("tunnel", "Tunnel Connection Failed / Closed (Proxy Quota Reached)"),
         ("proxy connection", "Proxy Connection Failed / Refused"),
@@ -1235,8 +1236,18 @@ def worker_routine(worker_id):
 
                         proxy_cfg, country_label = get_rotating_visitor_proxy()
                         if not proxy_cfg or not proxy_cfg.get('server'):
-                            print(f"[Worker #{worker_id}] ⚠️ No active proxy available in pool. Waiting 10s...")
-                            time.sleep(10)
+                            print(f"[Worker #{worker_id}] 🛑 All proxies exhausted! Work paused completely. Waiting for new proxy...")
+                            try:
+                                stats = load_stats()
+                                stats["daemon_status"] = "⏸️ PAUSED (All Proxies Exhausted)"
+                                save_stats(stats)
+                            except Exception:
+                                pass
+                            try:
+                                browser.close()
+                            except Exception:
+                                pass
+                            time.sleep(60)
                             continue
 
                         raw_proxy = proxy_cfg.get('raw')
