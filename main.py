@@ -1393,15 +1393,15 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
             except Exception:
                 pass
 
-        # Step 2: On /go/ page, wait for countdown and click GET LINK
+        # Step 2: On /go/ page, wait for countdown to finish and click GET LINK
         try:
             is_go_page = '/go/' in page.url
         except Exception:
             is_go_page = False
 
         if is_go_page:
-            for _ in range(4):
-                time.sleep(1)
+            # Wait up to 8 seconds for timer countdown to complete and enable the button
+            for _ in range(8):
                 try:
                     cur_u = page.url
                     if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u:
@@ -1409,15 +1409,17 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
                     btn2 = page.query_selector('#btn-main')
                     if btn2:
                         cls = btn2.get_attribute('class') or ''
-                        if 'disabled' not in cls:
+                        txt = (btn2.inner_text() or '').lower()
+                        if 'disabled' not in cls or 'get link' in txt:
                             break
                 except Exception:
                     pass
+                time.sleep(1)
 
             try:
                 btn2 = page.query_selector('#btn-main')
                 if btn2:
-                    btn2.click(force=True, timeout=2500)
+                    btn2.click(force=True, timeout=3000)
             except Exception:
                 pass
 
@@ -1432,10 +1434,9 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
             except Exception:
                 pass
 
-        # Destination Early-Exit: As soon as redirect happens, exit immediately!
+        # Destination Early-Exit: Wait up to 8 seconds for redirect to complete
         final_url = ""
-        for _ in range(5):
-            time.sleep(0.7)
+        for _ in range(10):
             try:
                 cur_u = page.url
                 if 'ouo.io' not in cur_u and 'ouo.press' not in cur_u and 'chrome-error' not in cur_u:
@@ -1443,6 +1444,7 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
                     break
             except Exception:
                 pass
+            time.sleep(0.8)
 
         try:
             if not final_url:
