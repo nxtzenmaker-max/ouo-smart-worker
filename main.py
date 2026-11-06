@@ -509,6 +509,8 @@ DEFAULT_CHROMIUM_ARGS = [
     '--disable-gpu',
     '--disable-software-rasterizer',
     '--disable-extensions',
+    '--ignore-certificate-errors',
+    '--ignore-ssl-errors',
     '--window-size=1280,720'
 ]
 
@@ -672,7 +674,8 @@ def check_session_validity(headless=True):
             context = browser.new_context(
                 proxy=active_cfg,
                 user_agent=USER_AGENT,
-                viewport={'width': 1280, 'height': 720}
+                viewport={'width': 1280, 'height': 720},
+                ignore_https_errors=True
             )
             with open(SESSION_FILE) as f:
                 cookie_dict = json.load(f)
@@ -709,7 +712,8 @@ def do_login(headless=True):
             context = browser.new_context(
                 proxy=active_cfg,
                 user_agent=USER_AGENT,
-                viewport={'width': 1280, 'height': 720}
+                viewport={'width': 1280, 'height': 720},
+                ignore_https_errors=True
             )
             context.add_init_script('''
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -809,7 +813,7 @@ def check_ouo_dashboard_hourly(force=False):
                 args=DEFAULT_CHROMIUM_ARGS,
                 ignore_default_args=['--enable-automation']
             )
-            context = browser.new_context(proxy=active_cfg, user_agent=USER_AGENT, viewport={'width': 1280, 'height': 720})
+            context = browser.new_context(proxy=active_cfg, user_agent=USER_AGENT, viewport={'width': 1280, 'height': 720}, ignore_https_errors=True)
             context.add_init_script('''
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 window.chrome = { runtime: {} };
@@ -924,7 +928,8 @@ def shorten_target(target_url, cookies_path=None):
                 context = browser.new_context(
                     proxy=active_cfg,
                     user_agent=USER_AGENT,
-                    viewport={'width': 1280, 'height': 720}
+                    viewport={'width': 1280, 'height': 720},
+                    ignore_https_errors=True
                 )
                 context.add_init_script('''
                     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -1014,7 +1019,8 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
         context = active_browser.new_context(
             proxy=clean_proxy,
             user_agent=USER_AGENT,
-            viewport={'width': 1280, 'height': 720}
+            viewport={'width': 1280, 'height': 720},
+            ignore_https_errors=True
         )
         context.add_init_script('''
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
