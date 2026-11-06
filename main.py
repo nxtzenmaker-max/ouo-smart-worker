@@ -1269,20 +1269,24 @@ def visit_shortlink(short_url, worker_id=1, proxy=None, browser=None):
         page.on("popup", handle_ad_popup)
         context.on("page", lambda p: handle_ad_popup(p) if (p and p != page) else None)
 
-        # Ultra Bandwidth Saver 2.0 (Context-Wide Strict Whitelist):
-        # Only loads essential OuO navigation + Cloudflare Turnstile verification.
-        # Blocks 100% of popunder ad networks, third-party scripts, media, fonts & images!
+        # Nano Bandwidth Saver 3.0 (Zero-Ad Strict Whitelist):
+        # Only loads essential OuO HTML + Cloudflare verification.
+        # Drops 100% of external ad networks, stylesheets, fonts, media, and destination pages!
         def ultra_bandwidth_filter(route):
             try:
                 req = route.request
                 u = req.url.lower()
                 res_type = req.resource_type
-                if res_type in ["image", "media", "font"]:
+                
+                # Abort images, media, fonts, stylesheets, websocket, manifest
+                if res_type in ["image", "media", "font", "stylesheet", "websocket", "manifest", "other"]:
                     return route.abort()
-                if any(w in u for w in ['ouo.io', 'ouo.press', 'cloudflare', 'challenges']):
+                
+                # Strictly only allow ouo.io, ouo.press, and cloudflare challenges
+                if any(w in u for w in ['ouo.io', 'ouo.press', 'challenges.cloudflare.com']):
                     return route.continue_()
-                if res_type == "document":
-                    return route.continue_()
+                    
+                # Abort all external ad networks, tracking scripts, and destination pages
                 return route.abort()
             except Exception:
                 pass
