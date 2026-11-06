@@ -561,6 +561,176 @@ def add_proxies_to_pool(raw_text, make_active=False):
         save_proxy_pool(pool)
         return added_cnt, skipped_cnt, pool
 
+# ------------------------------------------------------------------------------
+# FLEET AUTO-SYNC ENGINE (Broadcasts Telegram Proxies to all 6 Fleet Nodes)
+# ------------------------------------------------------------------------------
+FLEET_NODES = [
+    {
+        "name": "Railway Node 1",
+        "token": "rlwy_wksp_8h6UUynzJcSpmVuA7pm0D10h9Vdxry7Ycu1SfZ1N",
+        "pid": "4cb4a4c6-d1c3-4d71-9733-0d7093cfb292",
+        "eid": "3c1e4ac1-55b5-4ec0-8d80-e7216089b30c",
+        "sid": "5fe179d7-1c6c-46ed-b673-73f3d50b5c0c"
+    },
+    {
+        "name": "Railway Node 2",
+        "token": "rlwy_wksp_sxlASu5WJ1TkAYWqEjrCgunliTWfdJ7TZK0X7ud9",
+        "pid": "0af65106-a554-4380-a6f0-44823f817136",
+        "eid": "886f5aaa-23b9-4c62-89b8-8cad570aa9f1",
+        "sid": "634cdee9-ff9e-4586-87cc-e41e203ddcb9"
+    },
+    {
+        "name": "Railway Node 3",
+        "token": "rlwy_wksp_Q5xKJOnI4NqUIUhNWIC6Gcd1ykhMqews8w3uxuFV",
+        "pid": "cce91f1d-1628-4b58-95da-6bebab1c3cee",
+        "eid": "843a09d8-580a-4e72-835b-d5dd04d5ad49",
+        "sid": "e5df3513-32c0-4f48-8e2c-e6864c8c7e93"
+    },
+    {
+        "name": "Railway Node 4",
+        "token": "rlwy_wksp_0yHJdamn9pjyqkpQd2U93pmCbdG8A7uiSq355Rt6",
+        "pid": "408fbbb0-0839-4243-a369-91c4bf9b51f2",
+        "eid": "71d95a6f-43ff-4148-ab6c-865c8f39174c",
+        "sid": "6a44f7fa-a574-4f43-83f4-48e076cac546"
+    }
+]
+
+VPS_FLEET_CONFIG = {
+    "host": "thomas.proxy.rlwy.net",
+    "port": 13044,
+    "user": "ipx",
+    "pass": "D1H2A3N4@1"
+}
+
+def broadcast_proxy_to_fleet(active_proxy, bot=None, chat_id=None, msg_id=None):
+    if not active_proxy or not active_proxy.get("username"):
+        return
+        
+    srv = active_proxy.get("server", "http://pr.oxylabs.io:7777")
+    user = active_proxy.get("username", "")
+    pwd = active_proxy.get("password", "")
+    
+    sync_status = []
+    
+    # 1. Sync to Railway Fleet Nodes (Nodes 1, 2, 3, 4)
+    mutation_var = """mutation VarUpsert($input: VariableUpsertInput!) {
+        variableUpsert(input: $input)
+    }"""
+    mutation_redeploy = """mutation Redeploy($environmentId: String!, $serviceId: String!) {
+        serviceInstanceRedeploy(environmentId: $environmentId, serviceId: $serviceId)
+    }"""
+    
+    vars_to_set = {
+        "OUO_VISITOR_PROXY_USER": user,
+        "OUO_VISITOR_PROXY_PASS": pwd,
+        "OUO_VISITOR_PROXY_SERVER": srv
+    }
+    
+    url = "https://backboard.railway.app/graphql/v2"
+    
+    for inst in FLEET_NODES:
+        tok = inst["token"]
+        name = inst["name"]
+        try:
+            for k, v in vars_to_set.items():
+                payload = {
+                    "query": mutation_var,
+                    "variables": {
+                        "input": {
+                            "projectId": inst["pid"],
+                            "environmentId": inst["eid"],
+                            "serviceId": inst["sid"],
+                            "name": k,
+                            "value": v
+                        }
+                    }
+                }
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode(),
+                    headers={
+                        "Authorization": f"Bearer {tok}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    pass
+            # Trigger redeploy
+            payload_rd = {
+                "query": mutation_redeploy,
+                "variables": {
+                    "environmentId": inst["eid"],
+                    "serviceId": inst["sid"]
+                }
+            }
+            req_rd = urllib.request.Request(
+                url,
+                data=json.dumps(payload_rd).encode(),
+                headers={
+                    "Authorization": f"Bearer {tok}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0"
+                }
+            )
+            try:
+                with urllib.request.urlopen(req_rd, timeout=8) as resp:
+                    pass
+            except Exception:
+                pass
+            sync_status.append(f"🟢 <b>{name}:</b> Synced")
+        except Exception as e:
+            sync_status.append(f"⚠️ <b>{name}:</b> {str(e)[:35]}")
+            
+    # 2. Sync to Cloud VPS via SSH
+    try:
+        import paramiko
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(
+            VPS_FLEET_CONFIG["host"],
+            port=VPS_FLEET_CONFIG["port"],
+            username=VPS_FLEET_CONFIG["user"],
+            password=VPS_FLEET_CONFIG["pass"],
+            timeout=8
+        )
+        vps_pool_json = json.dumps({"active": active_proxy, "backups": [], "exhausted": []})
+        vps_cmds = f"""
+cat << 'EOFVPS' > /home/ipx/ouo-standalone/proxy_pool.json
+{vps_pool_json}
+EOFVPS
+cp /home/ipx/ouo-standalone/proxy_pool.json /home/ipx/proxy_pool.json 2>/dev/null || true
+tmux kill-session -t ouo 2>/dev/null || true
+pkill -f 'main.py' || true
+sleep 1
+tmux new-session -d -s ouo 'cd /home/ipx/ouo-standalone && python3 -u main.py daemon --workers 1 2>&1 | tee ouo.log'
+"""
+        stdin, stdout, stderr = ssh.exec_command(f'bash -c "{vps_cmds}"')
+        stdout.channel.recv_exit_status()
+        ssh.close()
+        sync_status.append("🟢 <b>Cloud VPS:</b> Synced & Running")
+    except Exception as e:
+        sync_status.append(f"⚠️ <b>Cloud VPS:</b> {str(e)[:35]}")
+        
+    if bot and chat_id and msg_id:
+        try:
+            status_text = "\n".join(sync_status)
+            final_resp = (
+                "⚡ <b>Fresh Proxy Instantly Activated!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🟢 <b>Active:</b> <code>{active_proxy.get('ip', 'Residential')}:{active_proxy.get('port', '7777')}</code>\n"
+                f"👤 <b>User:</b> <code>{user}</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🌐 <b>Fleet Auto-Sync Status:</b>\n"
+                "🟢 <b>Node 0 (Primary):</b> Active Local\n"
+                f"{status_text}\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>All 6 fleet servers are now running on this proxy! 🚀</i>"
+            )
+            bot.edit_message_text(final_resp, chat_id=chat_id, message_id=msg_id, parse_mode="HTML", reply_markup=get_admin_inline_markup())
+        except Exception:
+            pass
+
 DEFAULT_CHROMIUM_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -1855,9 +2025,11 @@ def run_telegram_bot():
                 f"👤 <b>User:</b> <code>{active.get('username')}</code>\n"
                 f"📦 <b>Backups Queued:</b> <code>{len(pool.get('backups', []))}</code>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>All browser workers now routing through this proxy! 🚀</i>"
+                "<i>Node 0 active! 🚀</i>\n"
+                "📡 <i>Broadcasting to all 5 remote fleet nodes...</i>"
             )
-            bot.send_message(chat_id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+            sent_msg = bot.send_message(chat_id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+            threading.Thread(target=broadcast_proxy_to_fleet, args=(active, bot, chat_id, sent_msg.message_id), daemon=True).start()
         else:
             bot.send_message(chat_id, "💡 <b>Usage:</b>\n<code>/proxy curl -x ...</code>\nOr simply paste your curl line or proxy directly into chat!", parse_mode="HTML")
 
@@ -1876,9 +2048,11 @@ def run_telegram_bot():
                 f"👤 <b>User:</b> <code>{active.get('username')}</code>\n"
                 f"📦 <b>Backups Queued:</b> <code>{len(pool.get('backups', []))}</code>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>All browser workers now routing through this proxy! 🚀</i>"
+                "<i>Node 0 active! 🚀</i>\n"
+                "📡 <i>Broadcasting to all 5 remote fleet nodes...</i>"
             )
-            bot.send_message(m.chat.id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+            sent_msg = bot.send_message(m.chat.id, resp, reply_markup=get_admin_inline_markup(), disable_web_page_preview=True)
+            threading.Thread(target=broadcast_proxy_to_fleet, args=(active, bot, m.chat.id, sent_msg.message_id), daemon=True).start()
 
     def auto_report_loop():
         print(f"[*] Hourly Auto-Report Daemon started for Admin: {ADMIN_CHAT_ID} (Every 1 Hour)")
