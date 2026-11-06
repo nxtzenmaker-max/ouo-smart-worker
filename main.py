@@ -260,11 +260,20 @@ def load_proxy_pool():
                 existing_raws.add(kb)
                 updated = True
 
-    # If current active proxy is None or old exhausted Oxylabs, set to fresh_default
+    # If current active proxy is None, exhausted, or old known exhausted Oxylabs
     cur_act = data.get("active")
-    if not cur_act or "da5f213e" in cur_act.get("raw", "") or "3dfee8b6" in cur_act.get("raw", ""):
-        data["active"] = fresh_default
-        updated = True
+    exhausted_raws = {e.get("raw") for e in data.get("exhausted", [])}
+    cur_raw = cur_act.get("raw", "") if cur_act else ""
+    if not cur_act or cur_raw in exhausted_raws or "da5f213e" in cur_raw or "3dfee8b6" in cur_raw:
+        fresh_raw = fresh_default.get("raw", "")
+        if fresh_raw and fresh_raw not in exhausted_raws:
+            data["active"] = fresh_default
+            updated = True
+        else:
+            backups = data.get("backups", [])
+            if backups:
+                data["active"] = backups.pop(0)
+                updated = True
 
     if updated or not os.path.exists(PROXIES_FILE):
         save_proxy_pool(data)
@@ -376,8 +385,12 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
                 return new_active
             return None
             
-        if dead_raw and current.get("raw") != dead_raw:
-            return pool.get("active")
+        if dead_raw:
+            c_raw = current.get("raw", "")
+            base_dead = dead_raw.split("-sessid-")[0]
+            base_curr = c_raw.split("-sessid-")[0]
+            if c_raw != dead_raw and base_curr not in base_dead and base_dead not in base_curr and current.get("server", "") not in dead_raw:
+                return pool.get("active")
 
         # Oxylabs rotating residential gateway protection:
         # Oxylabs rotates to a fresh residential IP on each request.
