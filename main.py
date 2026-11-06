@@ -1219,32 +1219,49 @@ def worker_routine(worker_id):
     print(f"[Worker #{worker_id}] 🚀 Dedicated Worker Active! Processing paid visits...")
     while daemon_running:
         try:
-            short_url = get_shortlink_from_pool()
-            if not short_url:
-                time.sleep(2)
-                continue
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=DEFAULT_CHROMIUM_ARGS,
+                    ignore_default_args=['--enable-automation']
+                )
+                cycle_count = 0
+                while daemon_running and browser.is_connected() and cycle_count < 100:
+                    try:
+                        short_url = get_shortlink_from_pool()
+                        if not short_url:
+                            time.sleep(2)
+                            continue
 
-            proxy_cfg, country_label = get_rotating_visitor_proxy()
-            if not proxy_cfg or not proxy_cfg.get('server'):
-                print(f"[Worker #{worker_id}] ⚠️ No active proxy available in pool. Waiting 10s...")
-                time.sleep(10)
-                continue
+                        proxy_cfg, country_label = get_rotating_visitor_proxy()
+                        if not proxy_cfg or not proxy_cfg.get('server'):
+                            print(f"[Worker #{worker_id}] ⚠️ No active proxy available in pool. Waiting 10s...")
+                            time.sleep(10)
+                            continue
 
-            raw_proxy = proxy_cfg.get('raw')
-            ok, dest = visit_shortlink(short_url, worker_id=worker_id, proxy=proxy_cfg, browser=None)
-            record_view_result(ok, short_url, dest, country=f"{country_label} (Rotating Residential)")
+                        raw_proxy = proxy_cfg.get('raw')
+                        ok, dest = visit_shortlink(short_url, worker_id=worker_id, proxy=proxy_cfg, browser=browser)
+                        record_view_result(ok, short_url, dest, country=f"{country_label} (Rotating Residential)")
+                        cycle_count += 1
 
-            if ok:
-                handle_proxy_success(raw_proxy)
-                print(f"[Worker #{worker_id}] ✅ Paid View Verified ({country_label}) -> {dest[:45]}!")
-            else:
-                handle_proxy_error(dest, raw_proxy)
-                print(f"[Worker #{worker_id}] ℹ️ Cycle ended on {short_url}: {dest[:45]}...")
+                        if ok:
+                            handle_proxy_success(raw_proxy)
+                            print(f"[Worker #{worker_id}] ✅ Paid View Verified ({country_label}) -> {dest[:45]}!")
+                        else:
+                            handle_proxy_error(dest, raw_proxy)
+                            print(f"[Worker #{worker_id}] ℹ️ Cycle ended on {short_url}: {dest[:45]}...")
 
-            worker_sleep = random.uniform(3.0, 6.0)
-            time.sleep(worker_sleep)
-        except Exception as loop_e:
-            print(f"[Worker #{worker_id}] View error: {loop_e}")
+                        worker_sleep = random.uniform(3.0, 6.0)
+                        time.sleep(worker_sleep)
+                    except Exception as loop_e:
+                        print(f"[Worker #{worker_id}] View error: {loop_e}")
+                        time.sleep(3)
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[Worker #{worker_id}] Auto-restarting browser: {e}")
             time.sleep(3)
 
 def run_multi_worker_daemon(num_workers=NUM_WORKERS, blocking=True):
