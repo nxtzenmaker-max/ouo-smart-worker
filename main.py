@@ -85,7 +85,6 @@ SESSION_FILE = resolve_path("ouo_session.json", "/home/ipx/ouo_session.json")
 STATS_FILE = resolve_path("campaign_stats.json", "/home/ipx/campaign_stats.json")
 AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
-RAW_PROXIES_FILE = resolve_path("raw_proxies.json", "/home/ipx/raw_proxies.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://pr.oxylabs.io:7777')
@@ -215,35 +214,18 @@ def load_proxy_pool():
             "exhausted": []
         }
 
-    # Automatically queue fresh backup proxies from raw_proxies.json or env
+    # Queue backup proxies from env if explicitly provided
     known_backups = []
-    raw_files = [
-        RAW_PROXIES_FILE,
-        os.path.join(BASE_DIR, "raw_proxies.json"),
-        "/home/ipx/ouo-standalone/raw_proxies.json",
-        "/home/ipx/raw_proxies.json",
-        "/home/ajit/raw_proxies.json"
-    ]
-    for rf in raw_files:
-        if rf and os.path.exists(rf):
-            try:
-                with open(rf, 'r') as f:
-                    content = json.load(f)
-                    if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, str) and item.strip():
-                                known_backups.append(item.strip())
-                if known_backups:
-                    break
-            except Exception as e:
-                print(f"[!] Error loading {rf}: {e}")
-
     env_list = os.environ.get("OUO_PROXY_LIST", "")
     if env_list:
         for item in env_list.replace(";", "\n").replace("|", "\n").splitlines():
             item = item.strip()
             if item:
                 known_backups.append(item)
+
+    # Strip any unauthenticated/public proxies from backups
+    if data.get("backups"):
+        data["backups"] = [b for b in data["backups"] if b.get("username")]
 
     existing_raws = set()
     if data.get("active"):
@@ -264,19 +246,25 @@ def load_proxy_pool():
                 existing_raws.add(kb)
                 updated = True
 
-    # If current active proxy is None, exhausted, or old known exhausted Oxylabs
+    # If current active proxy is None, exhausted, unauthenticated, or old known exhausted Oxylabs
     cur_act = data.get("active")
     exhausted_raws = {e.get("raw") for e in data.get("exhausted", [])}
     cur_raw = cur_act.get("raw", "") if cur_act else ""
-    if not cur_act or cur_raw in exhausted_raws or "da5f213e" in cur_raw or "3dfee8b6" in cur_raw or "3c566610" in cur_raw:
+    is_public = cur_act and not cur_act.get("username")
+    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610"])
+    
+    if not cur_act or cur_raw in exhausted_raws or is_public or is_old_ox:
         fresh_raw = fresh_default.get("raw", "")
-        if fresh_raw and fresh_raw not in exhausted_raws:
+        if fresh_raw and fresh_raw not in exhausted_raws and fresh_default.get("username"):
             data["active"] = fresh_default
             updated = True
         else:
             backups = data.get("backups", [])
             if backups:
                 data["active"] = backups.pop(0)
+                updated = True
+            else:
+                data["active"] = None
                 updated = True
 
     if updated or not os.path.exists(PROXIES_FILE):
@@ -1374,10 +1362,10 @@ def worker_routine(worker_id):
 
                         proxy_cfg, country_label = get_rotating_visitor_proxy()
                         if not proxy_cfg or not proxy_cfg.get('server'):
-                            print(f"[Worker #{worker_id}] 🛑 All proxies exhausted! Work paused completely. Waiting for new proxy...")
+                            print(f"[Worker #{worker_id}] 🛑 Waiting for fresh residential proxy... (Send new proxy in Telegram @Roxyubot to resume instant high-speed earning!)")
                             try:
                                 stats = load_stats()
-                                stats["daemon_status"] = "⏸️ PAUSED (All Proxies Exhausted)"
+                                stats["daemon_status"] = "⏸️ WAITING FOR PROXY (Send in @Roxyubot)"
                                 save_stats(stats)
                             except Exception:
                                 pass
