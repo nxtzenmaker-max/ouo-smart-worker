@@ -285,7 +285,7 @@ def load_proxy_pool():
 
     # Strip any unauthenticated or known exhausted proxies from backups
     if data.get("backups"):
-        data["backups"] = [b for b in data["backups"] if b.get("username") and "vcxyxyzq" not in b.get("raw", "")]
+        data["backups"] = [b for b in data["backups"] if b.get("username") and not any(x in b.get("raw", "") for x in ["vcxyxyzq", "2eyki2vkiv", "x7pkwzbttp"])]
 
     existing_raws = set()
     if data.get("active"):
@@ -537,14 +537,14 @@ def handle_proxy_error(err_str, proxy_raw):
                 u = cfg.get('username')
                 p = cfg.get('password')
                 p_url = f"http://{u}:{p}@{s}" if u and p else f"http://{s}"
-                r_probe = requests.get("https://www.google.com", proxies={"http": p_url, "https": p_url}, timeout=4)
-                if r_probe.status_code in (407, 402, 401):
+                r_probe = requests.get("https://www.google.com", proxies={"http": p_url, "https": p_url}, timeout=12)
+                if r_probe.status_code in (407, 402):
                     print(f"[ProxyManager] ❌ Quota / Traffic limit confirmed via probe HTTP {r_probe.status_code}")
                     mark_current_proxy_exhausted(proxy_raw, reason=f"Proxy HTTP {r_probe.status_code} Limit Reached")
                     return
         except Exception as e_probe:
             p_err = str(e_probe).lower()
-            if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "payment" in p_err or "proxyerror" in p_err:
+            if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "quota exceeded" in p_err:
                 print(f"[ProxyManager] ❌ Quota / Traffic limit confirmed via probe: {p_err[:60]}")
                 mark_current_proxy_exhausted(proxy_raw, reason="Proxy Quota / Payment Required (402)")
                 return
