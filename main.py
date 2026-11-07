@@ -87,9 +87,9 @@ AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
-VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://190.2.137.56:9999')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', '2eyki2vkiv-pool-res-country-US-mode-query-tier-premium')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'dRcs6XbB3Av9v8Ug')
+VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://89.38.99.96:9999')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'gtveu9ytj4-pool-res-country-US-mode-query-quality-static')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'KSzrQMTGPX4Vtpi2')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -274,7 +274,7 @@ def load_proxy_pool():
 
     # Queue backup proxies from default pool and env
     known_backups = [
-        "190.2.137.56:9999:2eyki2vkiv-pool-res-country-US-mode-query-tier-premium:dRcs6XbB3Av9v8Ug"
+        "89.38.99.96:9999:gtveu9ytj4-pool-res-country-US-mode-query-quality-static:KSzrQMTGPX4Vtpi2"
     ]
     env_list = os.environ.get("OUO_PROXY_LIST", "")
     if env_list:
@@ -311,7 +311,7 @@ def load_proxy_pool():
     exhausted_raws = {e.get("raw") for e in data.get("exhausted", [])}
     cur_raw = cur_act.get("raw", "") if cur_act else ""
     is_public = cur_act and not cur_act.get("username")
-    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610", "3801807f", "a3ba31ef", "22eeace0", "vcxyxyzq", "x7pkwzbttp"])
+    is_old_ox = any(x in cur_raw for x in ["da5f213e", "3dfee8b6", "3c566610", "3801807f", "a3ba31ef", "22eeace0", "vcxyxyzq", "x7pkwzbttp", "2eyki2vkiv"])
     
     if not cur_act or cur_raw in exhausted_raws or is_public or is_old_ox:
         fresh_raw = fresh_default.get("raw", "")
@@ -596,7 +596,7 @@ def add_proxies_to_pool(raw_text, make_active=False):
             p["fail_count"] = 0
             
             # If explicit make_active, fresh residential proxy, or no active proxy currently
-            if make_active or "customer-resi" in p.get("username", "") or not pool.get("active"):
+            if make_active or "customer-resi" in p.get("username", "") or "pool-res" in p.get("username", "") or not pool.get("active"):
                 if pool.get("active") and pool["active"].get("raw") != p["raw"]:
                     pool.setdefault("backups", []).insert(0, pool["active"])
                 pool["active"] = p
