@@ -87,9 +87,9 @@ AUTH_FILE = resolve_path("bot_auth.json", "/home/ipx/bot_auth.json")
 PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
-VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://89.38.99.96:9999')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'gtveu9ytj4-pool-res-country-US-mode-query-quality-static')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'KSzrQMTGPX4Vtpi2')
+VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://gw.proxyrise.com:443')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'res-bg')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'pgw-2818a342d5144fb32a282eadc0055ea554702233793c8769')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
@@ -272,10 +272,8 @@ def load_proxy_pool():
             "exhausted": []
         }
 
-    # Queue backup proxies from default pool and env
-    known_backups = [
-        "89.38.99.96:9999:gtveu9ytj4-pool-res-country-US-mode-query-quality-static:KSzrQMTGPX4Vtpi2"
-    ]
+    # Queue backup proxies from env
+    known_backups = []
     env_list = os.environ.get("OUO_PROXY_LIST", "")
     if env_list:
         for item in env_list.replace(";", "\n").replace("|", "\n").splitlines():
@@ -499,15 +497,32 @@ def mark_current_proxy_exhausted(dead_raw, reason="Exhausted / Connection Error"
 
 def handle_proxy_error(err_str, proxy_raw):
     err_lower = (err_str or "").lower()
+    is_dedicated = any(k in (proxy_raw or "").lower() for k in ["oxylabs", "customer-resi", "webshare", "pool-res", "proxyrise", "res-bg", "res-"])
     
-    immediate_signals = [
-        ("402", "402 Payment Required"),
+    # Critical Account Exhaustion Signals (applies to all proxies)
+    critical_signals = [
+        ("402 payment required", "402 Payment Required"),
         ("payment required", "402 Payment Required"),
-        ("payment", "402 Payment Required"),
-        ("407", "407 Proxy Auth Required / Expired"),
+        ("407 proxy auth", "407 Proxy Auth Required"),
         ("traffic limit", "Proxy Traffic Limit Reached (407)"),
-        ("proxy auth", "407 Proxy Auth Required / Expired"),
-        ("proxy connection", "Proxy Connection Failed / Refused"),
+        ("quota exceeded", "Proxy Quota Reached"),
+        ("bandwidth quota", "Proxy Bandwidth Quota Exhausted"),
+    ]
+    for needle, reason in critical_signals:
+        if needle in err_lower:
+            print(f"[ProxyManager] ❌ Quota / Proxy failure detected instantly: {reason}")
+            mark_current_proxy_exhausted(proxy_raw, reason=reason)
+            return
+
+    # If this is a rotating residential proxy, transient single-connection errors (tunnel/reset/timeout) are normal per-request IP glitches.
+    # We DO NOT exhaust the entire proxy account on temporary IP glitches!
+    if is_dedicated:
+        transient_glitches = ["tunnel", "net::err_", "timed_out", "connection_reset", "connection_closed", "connection_refused", "empty_response", "navigation", "timeout"]
+        if any(g in err_lower for g in transient_glitches):
+            print(f"[ProxyManager] ℹ️ Rotating residential transient IP glitch ({err_str[:40]}). Rotating to fresh exit IP automatically.")
+            return
+
+    immediate_signals = [
         ("err_proxy_connection_failed", "ERR_PROXY_CONNECTION_FAILED (Proxy Dead)"),
         ("err_socks_connection_failed", "ERR_SOCKS_CONNECTION_FAILED (SOCKS Dead)"),
         ("err_socks_connection_host_unreachable", "ERR_SOCKS_HOST_UNREACHABLE"),
@@ -519,8 +534,6 @@ def handle_proxy_error(err_str, proxy_raw):
         ("err_empty_response", "ERR_EMPTY_RESPONSE"),
         ("err_name_not_resolved", "ERR_NAME_NOT_RESOLVED"),
         ("connection refused", "Connection Refused"),
-        ("quota", "Proxy Quota Reached"),
-        ("bandwidth", "Proxy Bandwidth Quota Exhausted"),
     ]
     
     for needle, reason in immediate_signals:
@@ -544,13 +557,13 @@ def handle_proxy_error(err_str, proxy_raw):
                     return
         except Exception as e_probe:
             p_err = str(e_probe).lower()
-            if "407" in p_err or "traffic limit" in p_err or "402" in p_err or "quota exceeded" in p_err:
+            if "407 proxy auth" in p_err or "traffic limit" in p_err or "quota exceeded" in p_err or ("402" in p_err and "payment" in p_err):
                 print(f"[ProxyManager] ❌ Quota / Traffic limit confirmed via probe: {p_err[:60]}")
                 mark_current_proxy_exhausted(proxy_raw, reason="Proxy Quota / Payment Required (402)")
                 return
 
     # Fallback for generic connection drops
-    if "chrome-error" in err_lower or "net::err_" in err_lower:
+    if not is_dedicated and ("chrome-error" in err_lower or "net::err_" in err_lower):
         mark_current_proxy_exhausted(proxy_raw, reason=f"Connection Error ({err_str[:30]})")
         return
 
