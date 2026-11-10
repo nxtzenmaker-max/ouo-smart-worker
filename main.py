@@ -558,7 +558,7 @@ def handle_proxy_error(err_str, proxy_raw):
     with proxy_pool_lock:
         pool = load_proxy_pool()
         active = pool.get("active")
-        if active and "pr.oxylabs.io" not in active.get("server", "") and "customer-resi" not in active.get("username", "") and "webshare" not in active.get("server", "") and "webshare" not in active.get("username", "") and "pool-res" not in active.get("username", ""):
+        if active and not any(k in (active.get("server", "") + ":" + active.get("username", "")).lower() for k in ["oxylabs", "customer-resi", "webshare", "pool-res", "proxyrise", "res-bg", "res-"]):
             active["fail_count"] = active.get("fail_count", 0) + 1
             if active["fail_count"] >= 2:
                 print(f"[ProxyManager] ⚠️ Backup proxy {active.get('raw')} failed 2 times. Rotating to next backup proxy!")
@@ -596,7 +596,7 @@ def add_proxies_to_pool(raw_text, make_active=False):
             p["fail_count"] = 0
             
             # If explicit make_active, fresh residential proxy, or no active proxy currently
-            if make_active or "customer-resi" in p.get("username", "") or "pool-res" in p.get("username", "") or not pool.get("active"):
+            if make_active or any(k in (p.get("username", "") + ":" + p.get("server", "")).lower() for k in ["customer-resi", "pool-res", "proxyrise", "res-bg", "res-"]) or not pool.get("active"):
                 if pool.get("active") and pool["active"].get("raw") != p["raw"]:
                     pool.setdefault("backups", []).insert(0, pool["active"])
                 pool["active"] = p
