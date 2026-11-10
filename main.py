@@ -679,7 +679,7 @@ def broadcast_proxy_to_fleet(active_proxy, bot=None, chat_id=None, msg_id=None):
         variableUpsert(input: $input)
     }"""
     mutation_redeploy = """mutation Redeploy($environmentId: String!, $serviceId: String!) {
-        serviceInstanceRedeploy(environmentId: $environmentId, serviceId: $serviceId)
+        serviceInstanceDeploy(environmentId: $environmentId, serviceId: $serviceId, latestCommit: true)
     }"""
     
     vars_to_set = {
