@@ -88,8 +88,8 @@ PROXIES_FILE = resolve_path("proxy_pool.json", "/home/ipx/proxy_pool.json")
 
 # Dedicated Rotating Proxies for visitor traffic (Default fallback)
 VISITOR_PROXY_SERVER = os.environ.get('OUO_VISITOR_PROXY_SERVER', 'http://gw.proxyrise.com:443')
-VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'res-bg')
-VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'pgw-2818a342d5144fb32a282eadc0055ea554702233793c8769')
+VISITOR_PROXY_USER = os.environ.get('OUO_VISITOR_PROXY_USER', 'res-us')
+VISITOR_PROXY_PASS = os.environ.get('OUO_VISITOR_PROXY_PASS', 'pgw-80def2b3f0033deedc673e2520a1104c29eeb037265ca1b7')
 
 OUO_USERNAME = os.environ.get('OUO_USERNAME', "nxtzenmaker@gmail.com")
 OUO_PASSWORD = os.environ.get('OUO_PASSWORD', "Zeno@123")
